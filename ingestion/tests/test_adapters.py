@@ -1,6 +1,5 @@
 import httpx
-import pytest
-from src.adapters import fetch_hacker_news
+from src.adapters import fetch_google_news, fetch_hacker_news
 
 
 def test_fetch_hacker_news_parses_response_correctly():
@@ -57,7 +56,7 @@ def test_fetch_hacker_news_parses_response_correctly():
 
 
 def test_fetch_hacker_news_handles_empty_response():
-    def mock_handler(request: httpx.Request):
+    def mock_handler(_request: httpx.Request):
         return httpx.Response(200, json={"hits": []})
 
     transport = httpx.MockTransport(mock_handler)
@@ -65,3 +64,60 @@ def test_fetch_hacker_news_handles_empty_response():
         mentions = fetch_hacker_news(client, keyword="nonexistentbrand")
 
     assert mentions == []
+
+
+def test_fetch_google_news_parses_rss_xml():
+    rss = b"""<?xml version='1.0' encoding='UTF-8'?>
+    <rss version='2.0'><channel>
+      <item>
+        <title>Vercel outage - Tech News</title>
+        <link>https://news.google.com/articles/example1</link>
+        <guid>google-news-guid-1</guid>
+        <pubDate>Tue, 04 Nov 2026 12:00:00 GMT</pubDate>
+        <description>&lt;p&gt;Multiple deployments are failing.&lt;/p&gt;</description>
+        <source>Tech News</source>
+      </item>
+    </channel></rss>"""
+
+    def mock_handler(request: httpx.Request):
+        assert "news.google.com" in str(request.url)
+        assert "q=vercel" in str(request.url).lower()
+        return httpx.Response(200, content=rss, headers={"Content-Type": "application/rss+xml"})
+
+    with httpx.Client(transport=httpx.MockTransport(mock_handler)) as client:
+        mentions = fetch_google_news("vercel", "33333333-3333-3333-3333-333333333333", client=client)
+
+    assert len(mentions) == 1
+    assert mentions[0]["source"] == "google_news"
+    assert mentions[0]["title"] == "Vercel outage - Tech News"
+    assert mentions[0]["content"] == "Multiple deployments are failing."
+    assert mentions[0]["external_id"] == "google-news-guid-1"
+    assert mentions[0]["url"] == "https://news.google.com/articles/example1"
+    assert mentions[0]["author"] == "Tech News"
+    assert len(mentions[0]["content_hash"]) == 64
+
+
+def test_fetch_google_news_empty_feed():
+    rss = b"<rss version='2.0'><channel><title>News</title></channel></rss>"
+
+    def mock_handler(_request: httpx.Request):
+        return httpx.Response(200, content=rss)
+
+    with httpx.Client(transport=httpx.MockTransport(mock_handler)) as client:
+        mentions = fetch_google_news("no-results", "brand-1", client=client)
+
+    assert mentions == []
+
+
+def test_fetch_google_news_malformed_xml_and_http_error():
+    def malformed_handler(_request: httpx.Request):
+        return httpx.Response(200, content=b"<rss><channel>")
+
+    with httpx.Client(transport=httpx.MockTransport(malformed_handler)) as client:
+        assert fetch_google_news("vercel", "brand-1", client=client) == []
+
+    def error_handler(_request: httpx.Request):
+        return httpx.Response(503)
+
+    with httpx.Client(transport=httpx.MockTransport(error_handler)) as client:
+        assert fetch_google_news("vercel", "brand-1", client=client) == []

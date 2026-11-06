@@ -3,18 +3,13 @@
 import argparse
 import logging
 import os
-import sys
-from pathlib import Path
 import time
-
-# Ensure the ingestion directory is on sys.path when executed directly as a script
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv
 import httpx
 import redis
 
-from src.adapters import fetch_hacker_news
+from src.adapters import fetch_google_news, fetch_hacker_news
 from src.db import get_active_brands
 from src.publisher import is_new_mention, publish_mention
 
@@ -49,15 +44,19 @@ def run_ingestion_cycle(
         logger.info("Polling mentions for '%s' (keywords: %s)", brand_name, keywords)
 
         for keyword in keywords:
-            try:
-                mentions = fetch_hacker_news(
-                    client=http_client,
-                    keyword=keyword,
-                    brand_id=brand_id,
-                )
-            except Exception as e:
-                logger.error("Failed fetching for keyword '%s': %s", keyword, e)
-                continue
+            mentions: list[dict[str, object]] = []
+            for source_name, adapter in (
+                ("Hacker News", fetch_hacker_news),
+                ("Google News", fetch_google_news),
+            ):
+                try:
+                    if source_name == "Hacker News":
+                        fetched = adapter(http_client, keyword=keyword, brand_id=brand_id)
+                    else:
+                        fetched = adapter(keyword=keyword, brand_id=brand_id, client=http_client)
+                    mentions.extend(fetched)
+                except Exception as exc:
+                    logger.error("Failed fetching %s for keyword '%s': %s", source_name, keyword, exc)
 
             for mention in mentions:
                 content_hash = mention["content_hash"]
@@ -81,7 +80,7 @@ def run_ingestion_cycle(
     return new_count, dup_count
 
 
-def main():
+def main() -> None:
     load_dotenv()
     parser = argparse.ArgumentParser(description="BrandPulse Ingestion Worker")
     parser.add_argument(

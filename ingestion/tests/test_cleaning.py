@@ -1,4 +1,3 @@
-import pytest
 from src.cleaning import clean_html, make_content_hash, MAX_CONTENT_LENGTH
 
 

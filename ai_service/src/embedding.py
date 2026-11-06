@@ -35,3 +35,8 @@ def get_embedding(text: str) -> list[float]:
         convert_to_numpy=True,
     )
     return vector.astype(float).tolist()
+
+
+def generate_embedding(text: str) -> list[float]:
+    """Generate an embedding, matching the Phase 5 consumer API."""
+    return get_embedding(text)

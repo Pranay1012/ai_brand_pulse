@@ -1,0 +1,12 @@
+{
+  "include": ["ingestion", "ai_service"],
+  "venvPath": "d:/Projects/brandplus/ai_brand_pulse",
+  "venv": ".venv",
+  "extraPaths": [
+    "d:/Projects/brandplus/ai_brand_pulse/ingestion",
+    "d:/Projects/brandplus/ai_brand_pulse/ai_service"
+  ],
+  "reportUnusedImport": "warning",
+  "reportUnusedVariable": "none",
+  "reportUnusedParameter": "none"
+}

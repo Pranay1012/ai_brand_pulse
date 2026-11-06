@@ -1,6 +1,5 @@
 import math
 import numpy as np
-import pytest
 
 from src.sentiment import analyze_sentiment
 from src.embedding import get_embedding, EMBEDDING_DIM

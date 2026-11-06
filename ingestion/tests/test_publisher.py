@@ -76,7 +76,7 @@ def test_publish_mention_appends_to_stream(fake_redis_client):
     messages = fake_redis_client.xrange(STREAM_NAME)
     assert len(messages) == 1
 
-    msg_id, fields = messages[0]
+    _msg_id, fields = messages[0]
     # Check fields
     # fakeredis keys/values may be bytes
     field_dict = {
