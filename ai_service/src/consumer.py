@@ -100,7 +100,8 @@ def process_mention(message_data: dict[str, Any], conn: Any) -> dict[str, Any]:
 
     sentiment_score, sentiment_label = analyze_sentiment(str(text))
     embedding = generate_embedding(str(text))
-    cluster = find_nearest_cluster(conn, str(brand_id), embedding, threshold=0.82)
+    cluster_threshold = float(os.getenv("CLUSTER_SIMILARITY_THRESHOLD", "0.70"))
+    cluster = find_nearest_cluster(conn, str(brand_id), embedding, threshold=cluster_threshold)
 
     cluster_id = None
     action = "unclustered"
