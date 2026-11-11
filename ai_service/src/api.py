@@ -1,8 +1,17 @@
 import logging
 import os
+import sys
+from pathlib import Path
 import threading
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
+
+# Ensure sys.path contains ai_service root
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict, Field, field_validator

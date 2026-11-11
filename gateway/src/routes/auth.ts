@@ -63,22 +63,33 @@ router.post('/login', async (req, res, next) => {
       { userId: user.id, email: user.email, workspaceId: membershipRow?.workspace_id, role: membershipRow?.role },
       secret(), { expiresIn: '7d' },
     );
-    res.json({ token, user: { id: user.id, email: user.email, name: user.name } });
+    res.json({
+      token,
+      user: { id: user.id, email: user.email, name: user.name },
+      workspace: { id: membershipRow?.workspace_id },
+      role: membershipRow?.role,
+    });
   } catch (error) { next(error); }
 });
 
 router.get('/me', requireAuth, async (req, res, next) => {
   try {
     const result = await pool.query(
-      `SELECT u.id, u.email, u.name, wm.workspace_id, wm.role
+      `SELECT u.id, u.email, u.name, wm.workspace_id, wm.role, w.name AS workspace_name
        FROM users u
        LEFT JOIN workspace_members wm ON wm.user_id = u.id
+       LEFT JOIN workspaces w ON w.id = wm.workspace_id
        WHERE u.id = $1 AND ($2::uuid IS NULL OR wm.workspace_id = $2)
        ORDER BY wm.created_at LIMIT 1`,
       [req.user!.userId, req.user!.workspaceId || null],
     );
     if (!result.rows[0]) return res.status(404).json({ error: 'User not found' });
-    res.json(result.rows[0]);
+    const row = result.rows[0];
+    res.json({
+      user: { id: row.id, email: row.email, name: row.name },
+      workspace: { id: row.workspace_id, name: row.workspace_name },
+      role: row.role,
+    });
   } catch (error) { next(error); }
 });
 

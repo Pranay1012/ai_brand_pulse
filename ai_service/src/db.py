@@ -56,12 +56,12 @@ def find_nearest_cluster(
             first_seen_at,
             last_seen_at,
             created_at,
-            centroid <=> %s AS distance
+            centroid <=> %s::vector AS distance
         FROM issue_clusters
         WHERE brand_id = %s
           AND status = 'open'
           AND last_seen_at > now() - interval '30 days'
-        ORDER BY centroid <=> %s
+        ORDER BY centroid <=> %s::vector
         LIMIT 1;
     """
 
@@ -112,7 +112,7 @@ def create_cluster(
             first_seen_at,
             last_seen_at
         )
-        VALUES (%s, %s, %s, 1, %s, %s, 'open', NOW(), NOW())
+        VALUES (%s, %s, %s::vector, 1, %s, %s, 'open', NOW(), NOW())
         RETURNING id;
     """
 
@@ -142,7 +142,7 @@ def save_mention(conn: Any, mention_data: dict[str, Any], cluster_id: str | None
             sentiment_label,
             embedding
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::vector)
         RETURNING id;
     """
 
@@ -190,7 +190,13 @@ def update_cluster_centroid(
         if row is None:
             return
 
-        current_centroid = np.asarray(row[0], dtype=float)
+        raw_centroid = row[0]
+        if hasattr(raw_centroid, "to_numpy"):
+            current_centroid = raw_centroid.to_numpy()
+        elif hasattr(raw_centroid, "tolist"):
+            current_centroid = np.asarray(raw_centroid.tolist(), dtype=float)
+        else:
+            current_centroid = np.asarray(raw_centroid, dtype=float)
         mention_count = int(row[1] or 0)
         avg_sentiment = float(row[2] or 0.0)
         negative_count = int(row[3] or 0)
@@ -212,7 +218,7 @@ def update_cluster_centroid(
         cur.execute(
             """
             UPDATE issue_clusters
-            SET centroid = %s,
+            SET centroid = %s::vector,
                 mention_count = mention_count + 1,
                 negative_count = %s,
                 avg_sentiment = %s,
