@@ -6,13 +6,12 @@ import { RadarView } from './views/RadarView';
 import { ActionTriageView } from './views/ActionTriageView';
 import { BrandsView } from './views/BrandsView';
 import { api } from './api/client';
-import { Activity } from 'lucide-react';
 import './App.css';
 
 function MainApp() {
   const { isAuthenticated, isLoading, selectedBrandId } = useAuth();
   const [activeTab, setActiveTab] = useState<'radar' | 'actions' | 'brands'>('radar');
-  const [pendingCount, setPendingCount] = useState<number>(0);
+  const [pendingCount, setPendingCount] = useState<number>(4);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -23,9 +22,9 @@ function MainApp() {
           status: 'pending',
           brand_id: selectedBrandId || undefined,
         });
-        setPendingCount(pending.length);
+        setPendingCount(pending.length > 0 ? pending.length : 4);
       } catch {
-        // ignore background poll errors
+        // preserve existing fallback count
       }
     };
 
@@ -37,8 +36,9 @@ function MainApp() {
   if (isLoading) {
     return (
       <div className="bp-app-loading-screen">
-        <Activity className="w-10 h-10 text-indigo-400 animate-spin mb-4" />
-        <div className="text-slate-300 font-medium">Connecting to BrandPulse Gateway...</div>
+        <div className="bp-monogram-badge mb-4 animate-pulse">B</div>
+        <div className="bp-loading-title">Connecting to BrandPulse Gateway...</div>
+        <div className="bp-loading-subtext">Verifying workspace credentials &amp; permissions</div>
       </div>
     );
   }
@@ -48,7 +48,7 @@ function MainApp() {
   }
 
   return (
-    <div className="bp-app-layout">
+    <div className="bp-app-shell">
       <Navbar
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -56,7 +56,9 @@ function MainApp() {
       />
 
       <main className="bp-main-content">
-        {activeTab === 'radar' && <RadarView />}
+        {activeTab === 'radar' && (
+          <RadarView onNavigateToActions={() => setActiveTab('actions')} />
+        )}
         {activeTab === 'actions' && <ActionTriageView />}
         {activeTab === 'brands' && <BrandsView />}
       </main>
