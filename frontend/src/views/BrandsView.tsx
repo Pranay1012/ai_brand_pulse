@@ -1,61 +1,28 @@
-import React, { useState, useMemo } from 'react';
-import { CheckCircle, AlertCircle, ShieldAlert, X } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
+import React, { useEffect, useState, useMemo } from 'react';
+import { CheckCircle, AlertCircle, ShieldAlert, Sparkles, X } from 'lucide-react';
+import { useAuth } from '../context/useAuth';
 import { api } from '../api/client';
-import type { TrackedBrand } from '../types';
+import type { IssueCluster, TrackedBrand } from '../types';
 import { getDeterministicBars } from '../utils/metrics';
 
-// Default monitored brands if workspace has no brands yet
-const DEFAULT_WORKSPACE_BRANDS: TrackedBrand[] = [
-  {
-    id: 'brand-demo-1',
-    name: 'Supabase',
-    keywords: ['supabase', 'postgres', 'rls', 'edge-functions'],
-    competitor_names: ['Firebase', 'PlanetScale'],
-    is_active: true,
-  },
-  {
-    id: 'brand-demo-2',
-    name: 'Prisma',
-    keywords: ['prisma', 'orm', 'accelerate', 'pulse'],
-    competitor_names: ['Drizzle', 'TypeORM'],
-    is_active: true,
-  },
-  {
-    id: 'brand-demo-3',
-    name: 'Stripe',
-    keywords: ['stripe', 'checkout', 'billing', 'webhooks'],
-    competitor_names: ['Adyen', 'Paddle'],
-    is_active: true,
-  },
-  {
-    id: 'brand-demo-4',
-    name: 'Vercel',
-    keywords: ['vercel', 'nextjs', 'turbopack', 'ssr'],
-    competitor_names: ['Netlify', 'Cloudflare Pages'],
-    is_active: true,
-  },
-];
+function normalizeKeyword(raw: string): string {
+  return raw.trim().replace(/^#+/, '').trim();
+}
 
 export const BrandsView: React.FC = () => {
   const { brands, refreshBrands, role } = useAuth();
+  const [editingBrandId, setEditingBrandId] = useState<string | null>(null);
   const [name, setName] = useState('');
 
   // Interactive tag-chip inputs
-  const [keywordChips, setKeywordChips] = useState<string[]>(['supabase', 'postgres', 'auth']);
+  const [keywordChips, setKeywordChips] = useState<string[]>([]);
   const [keywordInput, setKeywordInput] = useState('');
 
-  const [competitorChips, setCompetitorChips] = useState<string[]>(['Firebase', 'PlanetScale']);
+  const [competitorChips, setCompetitorChips] = useState<string[]>([]);
   const [competitorInput, setCompetitorInput] = useState('');
 
-  // Slider & channel pill toggles
-  const [alertThreshold, setAlertThreshold] = useState<number>(60);
-  const [selectedChannels, setSelectedChannels] = useState<string[]>([
-    'Instagram',
-    'Reddit',
-    'Hacker News',
-    'X',
-  ]);
+  const [isActive, setIsActive] = useState<boolean>(true);
+  const [openClusters, setOpenClusters] = useState<IssueCluster[]>([]);
 
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
@@ -63,18 +30,74 @@ export const BrandsView: React.FC = () => {
 
   const isAdmin = role === 'admin';
 
-  // Effective brands list
-  const displayBrands = useMemo(() => {
-    return brands.length > 0 ? brands : DEFAULT_WORKSPACE_BRANDS;
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const loadOpenClusters = async () => {
+      try {
+        const data = await api.clusters.list({ status: 'open' }, controller.signal);
+        if (!controller.signal.aborted) {
+          setOpenClusters(data);
+        }
+      } catch (err) {
+        if (!controller.signal.aborted) {
+          console.error('Failed to load open clusters for brand counts:', err);
+        }
+      }
+    };
+
+    void loadOpenClusters();
+
+    return () => {
+      controller.abort();
+    };
   }, [brands]);
+
+  const clusterCountsByBrand = useMemo(() => {
+    const counts = new Map<string, { openCount: number; criticalCount: number }>();
+    for (const cluster of openClusters) {
+      const entry = counts.get(cluster.brand_id) ?? { openCount: 0, criticalCount: 0 };
+      entry.openCount += 1;
+      if ((cluster.negative_ratio || 0) >= 0.6) {
+        entry.criticalCount += 1;
+      }
+      counts.set(cluster.brand_id, entry);
+    }
+    return counts;
+  }, [openClusters]);
+
+  const resetForm = () => {
+    setEditingBrandId(null);
+    setName('');
+    setKeywordChips([]);
+    setKeywordInput('');
+    setCompetitorChips([]);
+    setCompetitorInput('');
+    setIsActive(true);
+  };
+
+  const handleStartConfigure = (brand: TrackedBrand) => {
+    if (!isAdmin) return;
+    setEditingBrandId(brand.id);
+    setName(brand.name);
+    setKeywordChips(brand.keywords || []);
+    setKeywordInput('');
+    setCompetitorChips(brand.competitor_names || []);
+    setCompetitorInput('');
+    setIsActive(brand.is_active);
+    setError(null);
+    setSuccess(null);
+  };
 
   // Keyword chip handlers
   const handleKeywordKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' || e.key === ',') {
       e.preventDefault();
-      const val = keywordInput.trim().replace(/^#/, '');
-      if (val && !keywordChips.includes(val)) {
-        setKeywordChips((prev) => [...prev, val]);
+      const val = normalizeKeyword(keywordInput);
+      if (val) {
+        if (!keywordChips.includes(val)) {
+          setKeywordChips((prev) => [...prev, val]);
+        }
         setKeywordInput('');
       }
     } else if (e.key === 'Backspace' && !keywordInput && keywordChips.length > 0) {
@@ -91,8 +114,10 @@ export const BrandsView: React.FC = () => {
     if (e.key === 'Enter' || e.key === ',') {
       e.preventDefault();
       const val = competitorInput.trim();
-      if (val && !competitorChips.includes(val)) {
-        setCompetitorChips((prev) => [...prev, val]);
+      if (val) {
+        if (!competitorChips.includes(val)) {
+          setCompetitorChips((prev) => [...prev, val]);
+        }
         setCompetitorInput('');
       }
     } else if (e.key === 'Backspace' && !competitorInput && competitorChips.length > 0) {
@@ -104,13 +129,7 @@ export const BrandsView: React.FC = () => {
     setCompetitorChips((prev) => prev.filter((_, i) => i !== idx));
   };
 
-  const toggleChannel = (ch: string) => {
-    setSelectedChannels((prev) =>
-      prev.includes(ch) ? prev.filter((c) => c !== ch) : [...prev, ch]
-    );
-  };
-
-  const handleAddBrand = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdmin) return;
     setError(null);
@@ -118,18 +137,20 @@ export const BrandsView: React.FC = () => {
     setLoading(true);
 
     try {
-      // Gather chips + any pending text
       const finalKeywords = [...keywordChips];
-      if (keywordInput.trim() && !finalKeywords.includes(keywordInput.trim())) {
-        finalKeywords.push(keywordInput.trim().replace(/^#/, ''));
+      const pendingKeyword = normalizeKeyword(keywordInput);
+      if (pendingKeyword && !finalKeywords.includes(pendingKeyword)) {
+        finalKeywords.push(pendingKeyword);
       }
 
       const finalCompetitors = [...competitorChips];
-      if (competitorInput.trim() && !finalCompetitors.includes(competitorInput.trim())) {
-        finalCompetitors.push(competitorInput.trim());
+      const pendingCompetitor = competitorInput.trim();
+      if (pendingCompetitor && !finalCompetitors.includes(pendingCompetitor)) {
+        finalCompetitors.push(pendingCompetitor);
       }
 
-      if (!name.trim()) {
+      const trimmedName = name.trim();
+      if (!trimmedName) {
         throw new Error('Brand name is required');
       }
 
@@ -137,21 +158,28 @@ export const BrandsView: React.FC = () => {
         throw new Error('At least one monitored keyword is required');
       }
 
-      await api.brands.create({
-        name: name.trim(),
-        keywords: finalKeywords,
-        competitor_names: finalCompetitors,
-      });
+      if (editingBrandId) {
+        await api.brands.update(editingBrandId, {
+          name: trimmedName,
+          keywords: finalKeywords,
+          competitor_names: finalCompetitors,
+          is_active: isActive,
+        });
+        setSuccess(`Brand "${trimmedName}" configuration updated.`);
+      } else {
+        await api.brands.create({
+          name: trimmedName,
+          keywords: finalKeywords,
+          competitor_names: finalCompetitors,
+          is_active: isActive,
+        });
+        setSuccess(`Brand "${trimmedName}" added to listening pipeline!`);
+      }
 
-      setSuccess(`Brand "${name}" added to real-time listening pipeline!`);
-      setName('');
-      setKeywordChips(['api', 'performance']);
-      setKeywordInput('');
-      setCompetitorChips(['Datadog']);
-      setCompetitorInput('');
+      resetForm();
       await refreshBrands();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to register brand');
+      setError(err instanceof Error ? err.message : 'Failed to save brand configuration');
     } finally {
       setLoading(false);
     }
@@ -163,104 +191,125 @@ export const BrandsView: React.FC = () => {
       <div className="bp-brands-split-layout">
         {/* Left Column (65%): 2x2 Grid of Monitored Workspace Brands */}
         <section className="bp-brands-grid-col" aria-label="Monitored Brands">
-          <div className="bp-brands-2x2-grid">
-            {displayBrands.map((b) => {
-              const monogram = b.name.charAt(0).toUpperCase();
-              const histogramBars = getDeterministicBars(b.id || b.name, 10, 20, 95);
-              const competitorsList = b.competitor_names && b.competitor_names.length > 0
-                ? b.competitor_names
-                : ['Firebase', 'PlanetScale'];
+          {brands.length === 0 ? (
+            <div className="bp-empty-well">
+              <Sparkles className="bp-icon-xl bp-text-muted bp-mb-2" />
+              <div className="bp-empty-title">No tracked brands yet</div>
+              <p className="bp-empty-desc">
+                Register a brand in the configuration studio to start monitoring public mentions.
+              </p>
+            </div>
+          ) : (
+            <div className="bp-brands-2x2-grid">
+              {brands.map((b) => {
+                const monogram = b.name.charAt(0).toUpperCase();
+                const histogramBars = getDeterministicBars(b.id || b.name, 10, 20, 95);
+                const brandStats = clusterCountsByBrand.get(b.id) ?? {
+                  openCount: 0,
+                  criticalCount: 0,
+                };
+                const isSelectedForEdit = editingBrandId === b.id;
 
-              return (
-                <article key={b.id} className="bp-brand-card">
-                  {/* Uppercase micro-label */}
-                  <span className="bp-micro-label">MONITORED WORKSPACE BRAND</span>
+                return (
+                  <article
+                    key={b.id}
+                    className={`bp-brand-card ${isSelectedForEdit ? 'selected' : ''}`}
+                  >
+                    {/* Uppercase micro-label */}
+                    <span className="bp-micro-label">MONITORED WORKSPACE BRAND</span>
 
-                  {/* Top Bar: Monogram, Name & Listening Active Pill */}
-                  <div className="bp-brand-card-top">
-                    <div className="bp-brand-header-left">
-                      <div className="bp-brand-monogram">{monogram}</div>
-                      <h3 className="bp-brand-title">{b.name}</h3>
-                    </div>
-                    <div className="bp-status-pill">
-                      <span className="bp-status-dot-ok" />
-                      <span>Listening Active</span>
-                    </div>
-                  </div>
-
-                  {/* Open Issues & 10-bar Histogram */}
-                  <div className="bp-brand-metrics-row">
-                    <div className="bp-brand-issues-metric">
-                      <div className="bp-brand-issues-number">8</div>
-                      <span className="bp-brand-issues-label">Open issue clusters</span>
-                      <span className="bp-brand-issues-subtext">2 critical alerts</span>
-                    </div>
-
-                    <div className="bp-kpi-histogram" aria-hidden="true">
-                      {histogramBars.map((h, i) => (
-                        <div
-                          key={i}
-                          className="bp-histogram-bar"
-                          style={{ height: `${h}%` }}
+                    {/* Top Bar: Monogram, Name & Active/Paused Pill */}
+                    <div className="bp-brand-card-top">
+                      <div className="bp-brand-header-left">
+                        <div className="bp-brand-monogram">{monogram}</div>
+                        <h3 className="bp-brand-title">{b.name}</h3>
+                      </div>
+                      <div className="bp-status-pill">
+                        <span
+                          className={b.is_active ? 'bp-status-dot-ok' : 'bp-status-dot-paused'}
                         />
-                      ))}
+                        <span>{b.is_active ? 'Listening Active' : 'Paused'}</span>
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Monitored Keywords Cloud */}
-                  <div className="bp-brand-section-box">
-                    <div className="bp-brand-section-label">Keywords</div>
-                    <div className="bp-keyword-pills-wrap">
-                      {b.keywords.map((kw, i) => (
-                        <span key={i} className="bp-tag-keyword-pill">
-                          #{kw}
+                    {/* Open Issues & 10-bar Histogram */}
+                    <div className="bp-brand-metrics-row">
+                      <div className="bp-brand-issues-metric">
+                        <div className="bp-brand-issues-number">{brandStats.openCount}</div>
+                        <span className="bp-brand-issues-label">Open issue clusters</span>
+                        <span className="bp-brand-issues-subtext">
+                          {brandStats.criticalCount} critical{' '}
+                          {brandStats.criticalCount === 1 ? 'alert' : 'alerts'}
                         </span>
-                      ))}
-                    </div>
-                  </div>
+                      </div>
 
-                  {/* Competitor Share of Voice Bars */}
-                  <div className="bp-brand-section-box">
-                    <div className="bp-brand-section-label">Competitor Share of Voice</div>
-                    <div className="bp-sov-list">
-                      {competitorsList.slice(0, 2).map((comp, idx) => {
-                        const sovPercent = idx === 0 ? 64 : 36;
-                        return (
-                          <div key={idx} className="bp-sov-item">
-                            <span className="bp-sov-label">vs {comp}</span>
-                            <div className="bp-sov-bar-track">
-                              <div
-                                className="bp-sov-bar-fill"
-                                style={{ width: `${sovPercent}%` }}
-                              />
-                            </div>
-                            <span className="bp-sov-percentage">{sovPercent}%</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  <div className="bp-card-divider" />
-
-                  {/* Footer with Channel badges & Configure Brand Link */}
-                  <div className="bp-brand-card-footer">
-                    <div className="bp-channel-pills-row">
-                      <span className="bp-channel-pill">IG</span>
-                      <span className="bp-channel-pill">X</span>
-                      <span className="bp-channel-pill">R</span>
-                      <span className="bp-channel-pill">HN</span>
+                      <div className="bp-kpi-histogram" aria-hidden="true">
+                        {histogramBars.map((h, i) => (
+                          <div
+                            key={i}
+                            className="bp-histogram-bar"
+                            style={{ height: `${h}%` }}
+                          />
+                        ))}
+                      </div>
                     </div>
 
-                    <button type="button" className="bp-view-cluster-link">
-                      <span>Configure brand</span>
-                      <span className="bp-arrow-glyph">↗</span>
-                    </button>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
+                    {/* Monitored Keywords Cloud */}
+                    <div className="bp-brand-section-box">
+                      <div className="bp-brand-section-label">Keywords</div>
+                      <div className="bp-keyword-pills-wrap">
+                        {b.keywords.map((kw, i) => (
+                          <span key={i} className="bp-tag-keyword-pill">
+                            #{kw}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Competitors */}
+                    <div className="bp-brand-section-box">
+                      <div className="bp-brand-section-label">Competitors</div>
+                      {b.competitor_names && b.competitor_names.length > 0 ? (
+                        <div className="bp-keyword-pills-wrap">
+                          {b.competitor_names.map((comp, idx) => (
+                            <span key={idx} className="bp-pill-neutral">
+                              vs {comp}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <span className="bp-doc-subtext">No competitors configured</span>
+                      )}
+                    </div>
+
+                    <div className="bp-card-divider" />
+
+                    {/* Footer with keyword count & Configure Brand Link */}
+                    <div className="bp-brand-card-footer">
+                      <span className="bp-pill-neutral">
+                        {b.keywords.length} {b.keywords.length === 1 ? 'keyword' : 'keywords'}
+                      </span>
+
+                      <button
+                        type="button"
+                        disabled={!isAdmin}
+                        onClick={() => handleStartConfigure(b)}
+                        className="bp-view-cluster-link"
+                        title={
+                          isAdmin
+                            ? `Configure ${b.name}`
+                            : 'Administrator role required to configure brands'
+                        }
+                      >
+                        <span>Configure brand</span>
+                        <span className="bp-arrow-glyph">↗</span>
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
         </section>
 
         {/* Right Column (35%): ADD / CONFIGURE TRACKED BRAND Studio Card */}
@@ -268,43 +317,50 @@ export const BrandsView: React.FC = () => {
           <div className="bp-studio-card">
             {/* Studio Header */}
             <div className="bp-studio-header">
-              <span className="bp-micro-label">ADD / CONFIGURE TRACKED BRAND</span>
-              <h3 className="bp-studio-title">Register Brand Pipeline</h3>
+              <span className="bp-micro-label">
+                {editingBrandId ? 'EDIT TRACKED BRAND' : 'ADD TRACKED BRAND'}
+              </span>
+              <h3 className="bp-studio-title">
+                {editingBrandId ? 'Update Brand Pipeline' : 'Register Brand Pipeline'}
+              </h3>
               <p className="bp-studio-subtitle">
-                Configure background streaming crawlers across Hacker News, X, Reddit, and Instagram.
+                Configure monitored keywords, competitors, and pipeline status for ingestion workers.
               </p>
             </div>
 
             {/* Non-admin RBAC warning */}
             {!isAdmin && (
-              <div className="bp-alert-warning mb-4">
-                <ShieldAlert className="w-4 h-4 flex-shrink-0" />
+              <div className="bp-alert-warning bp-mb-4">
+                <ShieldAlert className="bp-icon-md bp-shrink-0" />
                 <span>Only workspace administrators can add or configure brand pipelines.</span>
               </div>
             )}
 
             {/* Alerts */}
             {success && (
-              <div className="bp-alert-success mb-4">
-                <CheckCircle className="w-4 h-4 flex-shrink-0" />
+              <div className="bp-alert-success bp-mb-4">
+                <CheckCircle className="bp-icon-md bp-shrink-0" />
                 <span>{success}</span>
               </div>
             )}
             {error && (
-              <div className="bp-alert-error mb-4">
-                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <div className="bp-alert-error bp-mb-4">
+                <AlertCircle className="bp-icon-md bp-shrink-0" />
                 <span>{error}</span>
               </div>
             )}
 
             {/* Configuration Form */}
-            <form onSubmit={handleAddBrand} className="bp-studio-form">
+            <form onSubmit={handleSubmit} className="bp-studio-form">
               {/* Brand Name Input */}
               <div className="bp-field-group">
-                <label className="bp-field-label">Brand Name</label>
+                <label className="bp-field-label" htmlFor="brand-name-input">
+                  Brand Name
+                </label>
                 <input
+                  id="brand-name-input"
                   type="text"
-                  placeholder="e.g. Acme Cloud, Supabase"
+                  placeholder="e.g. Acme Cloud, Vercel"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   disabled={!isAdmin || loading}
@@ -315,7 +371,7 @@ export const BrandsView: React.FC = () => {
 
               {/* Monitored Keywords Tag-Chip Input Box */}
               <div className="bp-field-group">
-                <label className="bp-field-label">
+                <label className="bp-field-label" htmlFor="brand-keywords-input">
                   Monitored Keywords (press Enter or comma)
                 </label>
                 <div className="bp-tag-chip-container">
@@ -328,15 +384,19 @@ export const BrandsView: React.FC = () => {
                           onClick={() => removeKeywordChip(idx)}
                           className="bp-chip-remove-btn"
                           title={`Remove ${chip}`}
+                          aria-label={`Remove keyword ${chip}`}
                         >
-                          <X className="w-3 h-3" />
+                          <X className="bp-icon-xs" />
                         </button>
                       )}
                     </span>
                   ))}
                   <input
+                    id="brand-keywords-input"
                     type="text"
-                    placeholder={keywordChips.length === 0 ? 'Type keyword and press Enter...' : 'Add keyword...'}
+                    placeholder={
+                      keywordChips.length === 0 ? 'Type keyword and press Enter...' : 'Add keyword...'
+                    }
                     value={keywordInput}
                     onChange={(e) => setKeywordInput(e.target.value)}
                     onKeyDown={handleKeywordKeyDown}
@@ -348,7 +408,7 @@ export const BrandsView: React.FC = () => {
 
               {/* Competitor Benchmarks Tag-Chip Input Box */}
               <div className="bp-field-group">
-                <label className="bp-field-label">
+                <label className="bp-field-label" htmlFor="brand-competitors-input">
                   Competitor Benchmarks (press Enter or comma)
                 </label>
                 <div className="bp-tag-chip-container">
@@ -361,15 +421,21 @@ export const BrandsView: React.FC = () => {
                           onClick={() => removeCompetitorChip(idx)}
                           className="bp-chip-remove-btn"
                           title={`Remove ${comp}`}
+                          aria-label={`Remove competitor ${comp}`}
                         >
-                          <X className="w-3 h-3" />
+                          <X className="bp-icon-xs" />
                         </button>
                       )}
                     </span>
                   ))}
                   <input
+                    id="brand-competitors-input"
                     type="text"
-                    placeholder={competitorChips.length === 0 ? 'Type competitor and press Enter...' : 'Add competitor...'}
+                    placeholder={
+                      competitorChips.length === 0
+                        ? 'Type competitor and press Enter...'
+                        : 'Add competitor...'
+                    }
                     value={competitorInput}
                     onChange={(e) => setCompetitorInput(e.target.value)}
                     onKeyDown={handleCompetitorKeyDown}
@@ -379,53 +445,53 @@ export const BrandsView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Negative Sentiment Alert Threshold Range Slider */}
+              {/* Active Listening Pipeline Toggle */}
               <div className="bp-field-group">
-                <div className="bp-slider-header">
-                  <label className="bp-field-label mb-0">Negative Sentiment Alert Threshold</label>
-                  <span className="bp-slider-value">{alertThreshold}%</span>
-                </div>
-                <input
-                  type="range"
-                  min="20"
-                  max="90"
-                  step="5"
-                  value={alertThreshold}
-                  onChange={(e) => setAlertThreshold(Number(e.target.value))}
+                <label className="bp-toggle-row" htmlFor="brand-active-toggle">
+                  <input
+                    id="brand-active-toggle"
+                    type="checkbox"
+                    checked={isActive}
+                    onChange={(e) => setIsActive(e.target.checked)}
+                    disabled={!isAdmin || loading}
+                    className="bp-toggle-checkbox"
+                  />
+                  <div>
+                    <div className="bp-field-label bp-mb-0">Active Listening Pipeline</div>
+                    <span className="bp-doc-subtext">
+                      Enable ingestion polling for this brand
+                    </span>
+                  </div>
+                </label>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="bp-studio-actions-row bp-mt-4">
+                {editingBrandId && (
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => {
+                      resetForm();
+                      setError(null);
+                    }}
+                    className="bp-btn-secondary"
+                  >
+                    Cancel
+                  </button>
+                )}
+                <button
+                  type="submit"
                   disabled={!isAdmin || loading}
-                  className="bp-range-slider"
-                />
+                  className="bp-btn-primary bp-btn-full"
+                >
+                  {loading
+                    ? 'Saving...'
+                    : editingBrandId
+                    ? 'Save Changes →'
+                    : 'Save & Start Listening →'}
+                </button>
               </div>
-
-              {/* Source Channels Pill Toggles */}
-              <div className="bp-field-group">
-                <label className="bp-field-label">Source Channels</label>
-                <div className="bp-channel-toggles-row">
-                  {['Instagram', 'Reddit', 'Hacker News', 'X'].map((ch) => {
-                    const active = selectedChannels.includes(ch);
-                    return (
-                      <button
-                        key={ch}
-                        type="button"
-                        onClick={() => toggleChannel(ch)}
-                        disabled={!isAdmin || loading}
-                        className={`bp-channel-toggle-pill ${active ? 'active' : ''}`}
-                      >
-                        {ch}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Full-width Umber Submit Button */}
-              <button
-                type="submit"
-                disabled={!isAdmin || loading}
-                className="bp-btn-primary bp-btn-full mt-4"
-              >
-                {loading ? 'Saving...' : 'Save & Start Listening →'}
-              </button>
             </form>
           </div>
         </aside>

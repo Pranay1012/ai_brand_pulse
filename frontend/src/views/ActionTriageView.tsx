@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import {
   RefreshCw,
   Edit2,
@@ -6,224 +6,226 @@ import {
   ChevronDown,
   X,
   AlertCircle,
+  ExternalLink,
 } from 'lucide-react';
-import type { Action, JiraPayload } from '../types';
+import type { Action, JiraPayload, Mention } from '../types';
 import { api } from '../api/client';
-import { useAuth } from '../context/AuthContext';
-import { getDeterministicBars, getChannelBadges } from '../utils/metrics';
+import { useAuth } from '../context/useAuth';
 
-// Default mock actions matching Image 3 if backend actions are empty
-const DEFAULT_DEMO_ACTIONS: Action[] = [
-  {
-    id: 'act-demo-1',
-    cluster_id: 'cl-1',
-    brand_id: 'b-1',
-    brand_name: 'Supabase',
-    cluster_title: 'OAuth Token Refresh Failure on Mobile',
-    action_type: 'jira_ticket',
-    status: 'pending',
-    rationale: 'Customer complaints spiked past negative sentiment threshold (82%) on mobile auth tokens.',
-    created_at: new Date(Date.now() - 1200000).toISOString(),
-    payload: {
-      summary: 'OAuth Token Refresh Failure on Mobile',
-      priority: 'Highest',
-      description:
-        'OAuth Token Refresh Failure on Mobile is resulting in repeated 401 unauthorized errors during token refresh cycles on iOS and Android client SDKs.',
-      steps_to_reproduce: [
-        'Initialize mobile client with persistent session',
-        'Trigger token refresh after expiration window (3600s)',
-        'Observe gateway returning invalid_grant instead of refreshed JWT',
-      ],
-      acceptance_criteria: [
-        'Refresh token rotation handles transient socket drops with exponential backoff',
-        'Mobile SDK gracefully updates storage without prompting forced re-login',
-      ],
-    },
-  },
-  {
-    id: 'act-demo-2',
-    cluster_id: 'cl-2',
-    brand_id: 'b-1',
-    brand_name: 'Supabase',
-    cluster_title: 'Billing API 500 Errors',
-    action_type: 'jira_ticket',
-    status: 'pending',
-    rationale: 'Multiple developers reporting Stripe invoice sync failure during checkout.',
-    created_at: new Date(Date.now() - 2400000).toISOString(),
-    payload: {
-      summary: 'Billing API 500 Errors on Invoice Webhook',
-      priority: 'High',
-      description: 'Stripe webhook listener fails to deserialize decimal currencies on international tiers.',
-      steps_to_reproduce: ['Post test invoice.payment_succeeded payload with non-USD currency'],
-    },
-  },
-  {
-    id: 'act-demo-3',
-    cluster_id: 'cl-3',
-    brand_id: 'b-1',
-    brand_name: 'Supabase',
-    cluster_title: 'Billing API 500 Errors',
-    action_type: 'jira_ticket',
-    status: 'pending',
-    rationale: 'High negative sentiment concentration across Hacker News thread.',
-    created_at: new Date(Date.now() - 3600000).toISOString(),
-    payload: {
-      summary: 'Billing API 500 Errors',
-      priority: 'Highest',
-      description: 'Persistent 500 Internal Server errors reported across checkout microservice.',
-    },
-  },
-  {
-    id: 'act-demo-4',
-    cluster_id: 'cl-4',
-    brand_id: 'b-1',
-    brand_name: 'Supabase',
-    cluster_title: 'Billing API 500 Errors',
-    action_type: 'jira_ticket',
-    status: 'approved',
-    rationale: 'Approved for sprint dispatch by responder.',
-    created_at: new Date(Date.now() - 7200000).toISOString(),
-    payload: {
-      summary: 'Billing API 500 Errors',
-      priority: 'High',
-      description: 'Transient connection pool exhaustion under spike volume.',
-    },
-  },
-  {
-    id: 'act-demo-5',
-    cluster_id: 'cl-5',
-    brand_id: 'b-1',
-    brand_name: 'Supabase',
-    cluster_title: 'Billing API 500 Errors',
-    action_type: 'jira_ticket',
-    status: 'approved',
-    rationale: 'Approved ticket awaiting execution.',
-    created_at: new Date(Date.now() - 9600000).toISOString(),
-    payload: {
-      summary: 'Billing API 500 Errors',
-      priority: 'High',
-      description: 'Rate limiter misconfiguration on external billing webhooks.',
-    },
-  },
-  {
-    id: 'act-demo-6',
-    cluster_id: 'cl-6',
-    brand_id: 'b-1',
-    brand_name: 'Supabase',
-    cluster_title: 'Billing API 500 Errors',
-    action_type: 'jira_ticket',
-    status: 'approved',
-    rationale: 'Cluster sentiment triggered alert.',
-    created_at: new Date(Date.now() - 10800000).toISOString(),
-    payload: {
-      summary: 'Billing API 500 Errors',
-      priority: 'High',
-      description: 'Stripe webhook listener idempotency key conflict.',
-    },
-  },
-  {
-    id: 'act-demo-7',
-    cluster_id: 'cl-7',
-    brand_id: 'b-1',
-    brand_name: 'Supabase',
-    cluster_title: 'Billing API 500 Errors',
-    action_type: 'jira_ticket',
-    status: 'executed',
-    rationale: 'Dispatched to Jira project BP-104.',
-    created_at: new Date(Date.now() - 14400000).toISOString(),
-    payload: {
-      summary: 'Billing API 500 Errors',
-      priority: 'High',
-      description: 'Ticket BP-104 executed and assigned to billing-platform team.',
-    },
-  },
-  {
-    id: 'act-demo-8',
-    cluster_id: 'cl-8',
-    brand_id: 'b-1',
-    brand_name: 'Supabase',
-    cluster_title: 'Billing API 500 Errors',
-    action_type: 'jira_ticket',
-    status: 'executed',
-    rationale: 'Dispatched to Jira project BP-105.',
-    created_at: new Date(Date.now() - 18000000).toISOString(),
-    payload: {
-      summary: 'Billing API 500 Errors',
-      priority: 'Highest',
-      description: 'Resolved via emergency patch in billing engine.',
-    },
-  },
-];
+interface ActionTriageViewProps {
+  onActionsChanged?: () => void;
+}
 
-export const ActionTriageView: React.FC = () => {
-  const { role, selectedBrandId, brands } = useAuth();
+type ActionTypeFilter = 'all' | Action['action_type'];
+
+function formatActionType(actionType: Action['action_type']): string {
+  switch (actionType) {
+    case 'jira_ticket':
+      return 'Jira Ticket';
+    case 'pr_response':
+      return 'PR Response';
+    case 'sales_counter_hook':
+      return 'Sales Counter Hook';
+    default:
+      return actionType;
+  }
+}
+
+function getStatusBadgeMeta(status: Action['status']): { label: string; className: string } {
+  switch (status) {
+    case 'pending':
+      return { label: 'Pending Review', className: 'bp-pill-needs-attention' };
+    case 'approved':
+      return { label: 'Approved', className: 'bp-pill-neutral' };
+    case 'executed':
+      return { label: 'Executed', className: 'bp-pill-success' };
+    case 'rejected':
+      return { label: 'Rejected', className: 'bp-pill-neutral' };
+  }
+}
+
+function formatSourceMeta(source: string): { label: string; iconClass: string; glyph: string } {
+  const lower = (source || '').toLowerCase();
+  if (lower.includes('hacker') || lower === 'hn') {
+    return { label: 'Hacker News', iconClass: 'bp-source-icon-hn', glyph: 'H' };
+  }
+  if (lower.includes('google')) {
+    return { label: 'Google News', iconClass: 'bp-source-icon-news', glyph: 'G' };
+  }
+  if (lower.includes('reddit')) {
+    return { label: 'Reddit', iconClass: 'bp-source-icon-reddit', glyph: 'R' };
+  }
+  return { label: source || 'Web', iconClass: 'bp-source-icon-news', glyph: 'W' };
+}
+
+function formatDateLabel(isoDate: string): string {
+  const date = new Date(isoDate);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+export const ActionTriageView: React.FC<ActionTriageViewProps> = ({ onActionsChanged }) => {
+  const { role, selectedBrandId, setSelectedBrandId, brands } = useAuth();
   const [actions, setActions] = useState<Action[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loadedBrandKey, setLoadedBrandKey] = useState<string>('');
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   // Filter bar states
-  const [filterBrandId, setFilterBrandId] = useState<string>(selectedBrandId || '');
+  const [actionTypeFilter, setActionTypeFilter] = useState<ActionTypeFilter>('all');
   const [needsAttentionOnly, setNeedsAttentionOnly] = useState(false);
   const [showRejected, setShowRejected] = useState(false);
 
-  // Inspector selection (fallback to first action if none explicitly selected)
+  // Inspector selection
   const [selectedActionId, setSelectedActionId] = useState<string | null>(null);
 
   // In-line editing of draft ticket
   const [isEditing, setIsEditing] = useState(false);
-  const [editValues, setEditValues] = useState<{ summary: string; description: string } | null>(null);
+  const [editValues, setEditValues] = useState<{ summary: string; description: string } | null>(
+    null,
+  );
 
   // Rejection dialog / inline state
   const [isRejecting, setIsRejecting] = useState(false);
   const [rejectReason, setRejectReason] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const canTriage = role === 'admin' || role === 'responder';
+  // Linked cluster evidence mentions
+  const [evidenceState, setEvidenceState] = useState<{
+    clusterId: string | null;
+    items: Mention[];
+    failed: boolean;
+  }>({ clusterId: null, items: [], failed: false });
 
-  const fetchActions = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await api.actions.list({
-        brand_id: filterBrandId || selectedBrandId || undefined,
-      });
-      // If backend has no actions yet, seed with demo actions so UI renders rich layout
-      if (data.length > 0) {
-        setActions(data);
-      } else {
-        setActions(DEFAULT_DEMO_ACTIONS);
-      }
-    } catch {
-      // Fallback to rich demo actions if backend is offline/empty
-      setActions(DEFAULT_DEMO_ACTIONS);
-    } finally {
-      setLoading(false);
-    }
-  }, [filterBrandId, selectedBrandId]);
+  const canTriage = role === 'admin' || role === 'responder';
+  const brandKey = selectedBrandId || 'all';
+  const loading = loadedBrandKey !== brandKey || isManualRefreshing;
 
   useEffect(() => {
-    fetchActions();
-  }, [fetchActions]);
+    const controller = new AbortController();
 
-  // Current selected action
+    const loadActions = async () => {
+      try {
+        const data = await api.actions.list(
+          {
+            brand_id: selectedBrandId || undefined,
+          },
+          controller.signal,
+        );
+        if (controller.signal.aborted) return;
+        setActions(data);
+        setError(null);
+        setLoadedBrandKey(brandKey);
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        setError(err instanceof Error ? err.message : 'Failed to load actions');
+        setLoadedBrandKey(brandKey);
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsManualRefreshing(false);
+        }
+      }
+    };
+
+    void loadActions();
+
+    return () => {
+      controller.abort();
+    };
+  }, [selectedBrandId, brandKey, refreshTick]);
+
+  const handleManualRefresh = () => {
+    setIsManualRefreshing(true);
+    setRefreshTick((t) => t + 1);
+  };
+
+  // Filter actions based on toolbar filters
+  const filteredActions = useMemo(() => {
+    return actions.filter((a) => {
+      if (selectedBrandId && a.brand_id !== selectedBrandId) return false;
+      if (actionTypeFilter !== 'all' && a.action_type !== actionTypeFilter) return false;
+      if (needsAttentionOnly && a.status !== 'pending') return false;
+      return true;
+    });
+  }, [actions, selectedBrandId, actionTypeFilter, needsAttentionOnly]);
+
+  // Current selected action must come from filteredActions
   const currentAction = useMemo(() => {
+    if (filteredActions.length === 0) return null;
     if (selectedActionId) {
-      const found = actions.find((a) => a.id === selectedActionId);
+      const found = filteredActions.find((a) => a.id === selectedActionId);
       if (found) return found;
     }
-    return actions.length > 0 ? actions[0] : null;
-  }, [actions, selectedActionId]);
+    return filteredActions[0];
+  }, [filteredActions, selectedActionId]);
 
-  const payload = currentAction?.payload as JiraPayload;
-  const currentSummary = editValues?.summary ?? (payload?.summary || currentAction?.cluster_title || '');
-  const currentDescription = editValues?.description ?? (payload?.description || currentAction?.rationale || '');
+  const activeClusterId = currentAction?.cluster_id ?? null;
 
-  const handleSelectCard = (id: string) => {
-    setSelectedActionId(id);
+  useEffect(() => {
+    if (!activeClusterId) return;
+
+    const controller = new AbortController();
+
+    api.clusters
+      .mentions(activeClusterId, controller.signal)
+      .then((mentions) => {
+        if (!controller.signal.aborted) {
+          setEvidenceState({ clusterId: activeClusterId, items: mentions, failed: false });
+        }
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        console.error('Failed to load linked evidence mentions:', err);
+        setEvidenceState({ clusterId: activeClusterId, items: [], failed: true });
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [activeClusterId]);
+
+  const loadingEvidence = Boolean(activeClusterId && evidenceState.clusterId !== activeClusterId);
+  const linkedMentions = useMemo(
+    () =>
+      activeClusterId && evidenceState.clusterId === activeClusterId
+        ? evidenceState.items.slice(0, 4)
+        : [],
+    [activeClusterId, evidenceState],
+  );
+  const evidenceError = Boolean(
+    activeClusterId && evidenceState.clusterId === activeClusterId && evidenceState.failed,
+  );
+
+  const payload = currentAction?.payload as JiraPayload | undefined;
+  const payloadSummary = typeof payload?.summary === 'string' ? payload.summary : '';
+  const payloadDescription = typeof payload?.description === 'string' ? payload.description : '';
+  const currentSummary = editValues?.summary ?? (payloadSummary || currentAction?.cluster_title || '');
+  const currentDescription =
+    editValues?.description ?? (payloadDescription || currentAction?.rationale || '');
+
+  const stepsToReproduce = Array.isArray(payload?.steps_to_reproduce)
+    ? payload.steps_to_reproduce.map((step) => String(step))
+    : [];
+  const acceptanceCriteria = Array.isArray(payload?.acceptance_criteria)
+    ? payload.acceptance_criteria.map((item) => String(item))
+    : [];
+
+  const resetInspectorInputs = () => {
     setIsEditing(false);
     setEditValues(null);
     setIsRejecting(false);
     setRejectReason('');
+  };
+
+  const handleSelectCard = (id: string) => {
+    setSelectedActionId(id);
+    resetInspectorInputs();
   };
 
   const handleStartEdit = () => {
@@ -255,17 +257,20 @@ export const ActionTriageView: React.FC = () => {
     setIsSubmitting(true);
     setError(null);
     try {
-      if (currentAction.id.startsWith('act-demo-')) {
-        // Local state update for demo items
-        setActions((prev) =>
-          prev.map((a) =>
-            a.id === currentAction.id ? { ...a, status: 'approved' as const } : a
-          )
-        );
-      } else {
-        const updated = await api.actions.approve(currentAction.id, currentAction.payload);
-        setActions((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
-      }
+      const payloadToSend =
+        isEditing && editValues
+          ? {
+              ...(currentAction.payload as JiraPayload),
+              summary: editValues.summary,
+              description: editValues.description,
+            }
+          : currentAction.payload;
+
+      const updated = await api.actions.approve(currentAction.id, payloadToSend);
+      setActions((prev) => prev.map((a) => (a.id === updated.id ? { ...a, ...updated } : a)));
+      setIsEditing(false);
+      setEditValues(null);
+      onActionsChanged?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Approval failed');
     } finally {
@@ -278,16 +283,9 @@ export const ActionTriageView: React.FC = () => {
     setIsSubmitting(true);
     setError(null);
     try {
-      if (currentAction.id.startsWith('act-demo-')) {
-        setActions((prev) =>
-          prev.map((a) =>
-            a.id === currentAction.id ? { ...a, status: 'executed' as const } : a
-          )
-        );
-      } else {
-        const updated = await api.actions.execute(currentAction.id);
-        setActions((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
-      }
+      const updated = await api.actions.execute(currentAction.id);
+      setActions((prev) => prev.map((a) => (a.id === updated.id ? { ...a, ...updated } : a)));
+      onActionsChanged?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Execution failed');
     } finally {
@@ -301,22 +299,13 @@ export const ActionTriageView: React.FC = () => {
     setIsSubmitting(true);
     setError(null);
     try {
-      if (currentAction.id.startsWith('act-demo-')) {
-        setActions((prev) =>
-          prev.map((a) =>
-            a.id === currentAction.id
-              ? { ...a, status: 'rejected' as const, reject_reason: rejectReason.trim() }
-              : a
-          )
-        );
-        setIsRejecting(false);
-        setRejectReason('');
-      } else {
-        const updated = await api.actions.reject(currentAction.id, rejectReason.trim());
-        setActions((prev) => prev.map((a) => (a.id === updated.id ? updated : a)));
-        setIsRejecting(false);
-        setRejectReason('');
-      }
+      const updated = await api.actions.reject(currentAction.id, rejectReason.trim());
+      setActions((prev) => prev.map((a) => (a.id === updated.id ? { ...a, ...updated } : a)));
+      setIsRejecting(false);
+      setRejectReason('');
+      setIsEditing(false);
+      setEditValues(null);
+      onActionsChanged?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Rejection failed');
     } finally {
@@ -324,26 +313,24 @@ export const ActionTriageView: React.FC = () => {
     }
   };
 
-  // Filter actions based on toolbar filters
-  const filteredActions = useMemo(() => {
-    return actions.filter((a) => {
-      if (filterBrandId && a.brand_id !== filterBrandId) return false;
-      if (needsAttentionOnly && a.status !== 'pending') return false;
-      return true;
-    });
-  }, [actions, filterBrandId, needsAttentionOnly]);
-
   const pendingList = filteredActions.filter((a) => a.status === 'pending');
   const approvedList = filteredActions.filter((a) => a.status === 'approved');
   const executedList = filteredActions.filter((a) => a.status === 'executed');
   const rejectedList = filteredActions.filter((a) => a.status === 'rejected');
 
   const renderCard = (action: Action) => {
-    const payload = action.payload as JiraPayload;
+    const cardPayload = action.payload as JiraPayload;
     const isSelected = currentAction?.id === action.id;
-    const priority = payload?.priority || 'Highest';
-    const channels = getChannelBadges(action.id);
-    const title = payload?.summary || action.cluster_title || 'Synthesized Action';
+    const priority =
+      typeof cardPayload?.priority === 'string' && cardPayload.priority
+        ? cardPayload.priority
+        : 'Normal';
+    const title =
+      (typeof cardPayload?.summary === 'string' && cardPayload.summary) ||
+      action.cluster_title ||
+      'Synthesized Action';
+    const statusMeta = getStatusBadgeMeta(action.status);
+    const createdLabel = formatDateLabel(action.created_at);
 
     return (
       <article
@@ -354,59 +341,52 @@ export const ActionTriageView: React.FC = () => {
         {/* Top micro-header */}
         <div className="bp-kanban-card-top">
           <span className="bp-micro-label">
-            JIRA BUG TICKET &bull; {priority.toUpperCase()} PRIORITY
+            {formatActionType(action.action_type).toUpperCase()} &bull; {priority.toUpperCase()}
           </span>
-          <span className="bp-pill-needs-attention">Needs attention</span>
+          <span className={statusMeta.className}>{statusMeta.label}</span>
         </div>
 
-        {/* Title and volume */}
+        {/* Title */}
         <h4 className="bp-kanban-title" title={title}>
           {title}
         </h4>
 
         <div className="bp-kanban-mid-row">
-          <span className="bp-kanban-mentions">142 mentions across 3 channels</span>
-          <div className="bp-kanban-mini-bars" aria-hidden="true">
-            {getDeterministicBars(action.id, 8, 20, 95).map((h, i) => (
-              <div
-                key={i}
-                className="bp-mini-histogram-bar"
-                style={{ height: `${h}%` }}
-              />
-            ))}
-          </div>
+          <span className="bp-kanban-mentions">
+            {action.cluster_title || 'Linked issue cluster'}
+          </span>
         </div>
 
         <div className="bp-card-divider" />
 
         {/* Footer row */}
         <div className="bp-kanban-card-bottom">
-          <div className="bp-channel-pills-row">
-            {channels.map((ch, idx) => (
-              <span key={idx} className="bp-channel-pill">
-                {ch}
-              </span>
-            ))}
-          </div>
-          <span className="bp-pill-neutral">Linked cluster</span>
+          <span className="bp-pill-neutral">{action.brand_name || 'Workspace'}</span>
+          {createdLabel && <span className="bp-kanban-mentions">{createdLabel}</span>}
         </div>
       </article>
     );
   };
 
-  const currentPriority = payload?.priority || 'High';
+  const currentPriority =
+    typeof payload?.priority === 'string' && payload.priority ? payload.priority : 'Normal';
+  const currentStatusMeta = currentAction ? getStatusBadgeMeta(currentAction.status) : null;
 
   return (
     <div className="bp-view-shell">
       {/* Filter Pills Bar */}
       <section className="bp-triage-filter-bar">
         <div className="bp-filter-pill-group">
-          {/* Brand Filter */}
+          {/* Brand Filter synced with AuthContext */}
           <div className="bp-select-pill-wrapper">
             <select
-              value={filterBrandId}
-              onChange={(e) => setFilterBrandId(e.target.value)}
+              value={selectedBrandId}
+              onChange={(e) => {
+                setSelectedBrandId(e.target.value);
+                resetInspectorInputs();
+              }}
               className="bp-filter-select-pill"
+              aria-label="Filter actions by brand"
             >
               <option value="">All Brands</option>
               {brands.map((b) => (
@@ -418,19 +398,36 @@ export const ActionTriageView: React.FC = () => {
             <ChevronDown className="bp-select-chevron" />
           </div>
 
+          {/* Action Type Filter */}
+          <div className="bp-select-pill-wrapper">
+            <select
+              value={actionTypeFilter}
+              onChange={(e) => {
+                setActionTypeFilter(e.target.value as ActionTypeFilter);
+                resetInspectorInputs();
+              }}
+              className="bp-filter-select-pill"
+              aria-label="Filter actions by type"
+            >
+              <option value="all">All Action Types</option>
+              <option value="jira_ticket">Jira Tickets</option>
+              <option value="pr_response">PR Responses</option>
+              <option value="sales_counter_hook">Sales Counter Hooks</option>
+            </select>
+            <ChevronDown className="bp-select-chevron" />
+          </div>
+
           {/* Needs Attention Toggle */}
           <button
             type="button"
             className={`bp-filter-toggle-pill ${needsAttentionOnly ? 'active' : ''}`}
-            onClick={() => setNeedsAttentionOnly(!needsAttentionOnly)}
+            onClick={() => {
+              setNeedsAttentionOnly(!needsAttentionOnly);
+              resetInspectorInputs();
+            }}
           >
-            Needs Attention
+            Pending Only
           </button>
-
-          {/* Jira Tickets Tag */}
-          <div className="bp-select-pill-wrapper">
-            <span className="bp-filter-static-pill">Jira Tickets ▾</span>
-          </div>
 
           {/* Toggle Show Rejected */}
           <button
@@ -444,26 +441,27 @@ export const ActionTriageView: React.FC = () => {
 
         <button
           type="button"
-          onClick={fetchActions}
+          onClick={handleManualRefresh}
           className="bp-icon-refresh-btn"
           title="Refresh actions"
+          aria-label="Refresh actions"
         >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`bp-icon-sm ${loading ? 'bp-spin' : ''}`} />
         </button>
       </section>
 
       {/* Error alert */}
       {error && (
-        <div className="bp-alert-error mb-4">
-          <AlertCircle className="w-4 h-4 flex-shrink-0" />
+        <div className="bp-alert-error bp-mb-4">
+          <AlertCircle className="bp-icon-md bp-shrink-0" />
           <span>{error}</span>
         </div>
       )}
 
-      {/* Main Split Layout: 60% Left Kanban Queue / 40% Right AI Action Inspector & Diff */}
+      {/* Main Split Layout: 60% Left Kanban Queue / 40% Right AI Action Inspector */}
       <div className="bp-triage-split-layout">
         {/* Left Kanban Columns (60%) */}
-        <div className="bp-kanban-board-area">
+        <div className={`bp-kanban-board-area ${showRejected ? 'cols-4' : ''}`}>
           {/* Column 1: Pending Review */}
           <div className="bp-triage-column">
             <div className="bp-triage-col-header">
@@ -527,29 +525,36 @@ export const ActionTriageView: React.FC = () => {
           )}
         </div>
 
-        {/* Right AI Action Inspector & Diff (40%) */}
-        <aside className="bp-triage-inspector-col" aria-label="Action Inspector and Diff">
+        {/* Right AI Action Inspector (40%) */}
+        <aside className="bp-triage-inspector-col" aria-label="Action Inspector">
           <div className="bp-action-inspector-card">
             {currentAction ? (
               <>
                 {/* Micro-label & Badges Header */}
                 <div className="bp-action-meta-bar">
-                  <span className="bp-micro-label">AI ACTION INSPECTOR &amp; DIFF</span>
+                  <span className="bp-micro-label">AI ACTION INSPECTOR</span>
                 </div>
 
                 <div className="bp-action-badges-row">
-                  <span className="bp-pill-neutral font-semibold">JIRA BUG Ticket</span>
-                  <span className="bp-pill-neutral font-medium">{currentPriority} Post</span>
-                  <span className="bp-pill-needs-attention">Needs Action</span>
+                  <span className="bp-pill-neutral bp-font-semibold">
+                    {formatActionType(currentAction.action_type)}
+                  </span>
+                  <span className="bp-pill-neutral bp-font-medium">
+                    {currentPriority} Priority
+                  </span>
+                  {currentStatusMeta && (
+                    <span className={currentStatusMeta.className}>{currentStatusMeta.label}</span>
+                  )}
                 </div>
 
-                {/* Title with In-line Edit toggle */}
+                {/* Title with In-line Edit toggle (pending actions only) */}
                 <div className="bp-action-title-row">
                   {isEditing ? (
                     <input
                       type="text"
                       className="bp-input bp-edit-title-input"
                       value={currentSummary}
+                      aria-label="Action summary"
                       onChange={(e) =>
                         setEditValues({
                           summary: e.target.value,
@@ -559,11 +564,11 @@ export const ActionTriageView: React.FC = () => {
                     />
                   ) : (
                     <h3 className="bp-action-main-title">
-                      Draft Jira Ticket: {currentSummary || 'OAuth Token Refresh Failure on Mobile'}
+                      {currentSummary || 'Untitled Action Draft'}
                     </h3>
                   )}
 
-                  {canTriage && (
+                  {canTriage && currentAction.status === 'pending' && (
                     <button
                       type="button"
                       onClick={() => {
@@ -578,12 +583,12 @@ export const ActionTriageView: React.FC = () => {
                     >
                       {isEditing ? (
                         <>
-                          <Check className="w-3.5 h-3.5" />
+                          <Check className="bp-icon-sm" />
                           <span>Save</span>
                         </>
                       ) : (
                         <>
-                          <Edit2 className="w-3.5 h-3.5" />
+                          <Edit2 className="bp-icon-sm" />
                           <span>Edit</span>
                         </>
                       )}
@@ -593,14 +598,15 @@ export const ActionTriageView: React.FC = () => {
 
                 {/* Structured Document Well */}
                 <div className="bp-document-well">
-                  {/* Summary Section */}
+                  {/* Description Section */}
                   <div className="bp-doc-section">
-                    <h5 className="bp-doc-heading">Summary</h5>
+                    <h5 className="bp-doc-heading">Description</h5>
                     {isEditing ? (
                       <textarea
-                        rows={3}
+                        rows={4}
                         className="bp-input bp-doc-textarea"
                         value={currentDescription}
+                        aria-label="Action description"
                         onChange={(e) =>
                           setEditValues({
                             summary: currentSummary,
@@ -610,83 +616,98 @@ export const ActionTriageView: React.FC = () => {
                       />
                     ) : (
                       <p className="bp-doc-paragraph">
-                        {currentDescription ||
-                          'OAuth Token Refresh Failure on Mobile is resulting in persistent 401 unauthenticated errors for active consumer sessions.'}
+                        {currentDescription || 'No description provided.'}
                       </p>
                     )}
                   </div>
 
-                  {/* Customer Impact Section */}
-                  <div className="bp-doc-section">
-                    <h5 className="bp-doc-heading">Customer Impact</h5>
-                    <ul className="bp-doc-bullet-list">
-                      <li>Customer Impact: recurrent 401 exceptions on mobile sessions, forced logout.</li>
-                      <li>Customer Impact: checkout session drops causing immediate order abandonment.</li>
-                    </ul>
-                  </div>
-
-                  {/* Suggested Fix Section with Code Block */}
-                  <div className="bp-doc-section">
-                    <h5 className="bp-doc-heading">Suggested Fix</h5>
-                    <p className="bp-doc-subtext">
-                      Develop client interceptor logic to handle token rotation seamlessly:
-                    </p>
-                    <div className="bp-code-diff-well">
-                      <div className="bp-code-line">
-                        <span className="bp-code-lineno">1</span>
-                        <code>section (motfection) &#123;</code>
-                      </div>
-                      <div className="bp-code-line">
-                        <span className="bp-code-lineno">2</span>
-                        <code>&nbsp;&nbsp;return this.come.enoth();</code>
-                      </div>
-                      <div className="bp-code-line">
-                        <span className="bp-code-lineno">3</span>
-                        <code>&#125;</code>
-                      </div>
+                  {/* Rationale Section */}
+                  {currentAction.rationale && (
+                    <div className="bp-doc-section">
+                      <h5 className="bp-doc-heading">Trigger Rationale</h5>
+                      <p className="bp-doc-paragraph">{currentAction.rationale}</p>
                     </div>
-                    <ul className="bp-doc-bullet-list mt-2">
-                      <li>Enforce exponential backoff on retry headers.</li>
-                      <li>Suggested fix: rotate refresh token before expiration deadline.</li>
-                    </ul>
-                  </div>
+                  )}
 
-                  {/* Assignee Row */}
-                  <div className="bp-doc-assignee-row">
-                    <div className="bp-assignee-pill">
-                      <span>Assignee: Alex M. / Jira ▾</span>
+                  {/* Steps to Reproduce */}
+                  {stepsToReproduce.length > 0 && (
+                    <div className="bp-doc-section">
+                      <h5 className="bp-doc-heading">Steps to Reproduce</h5>
+                      <ul className="bp-doc-bullet-list">
+                        {stepsToReproduce.map((step, idx) => (
+                          <li key={idx}>{step}</li>
+                        ))}
+                      </ul>
                     </div>
-                    <span className="bp-pill-needs-attention">Needs Action</span>
-                  </div>
+                  )}
+
+                  {/* Acceptance Criteria */}
+                  {acceptanceCriteria.length > 0 && (
+                    <div className="bp-doc-section bp-mb-0">
+                      <h5 className="bp-doc-heading">Acceptance Criteria</h5>
+                      <ul className="bp-doc-bullet-list">
+                        {acceptanceCriteria.map((criterion, idx) => (
+                          <li key={idx}>{criterion}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                 </div>
 
                 {/* Linked Evidence Section */}
                 <div className="bp-linked-evidence-section">
                   <h5 className="bp-evidence-heading">Linked evidence</h5>
 
-                  {/* Evidence item 1: Hacker News */}
-                  <div className="bp-evidence-item">
-                    <div className="bp-evidence-source-row">
-                      <span className="bp-source-icon-hn">H</span>
-                      <strong className="bp-evidence-source">Hacker News</strong>
-                      <span className="bp-evidence-time">&bull; 2 quoted one ago</span>
+                  {loadingEvidence ? (
+                    <div className="bp-mentions-loading">
+                      <span className="bp-sync-spinner" />
+                      <span>Loading linked mentions...</span>
                     </div>
-                    <p className="bp-evidence-quote">
-                      &ldquo;OAuth Token Refresh Failure on Mobile: 2 post social mobile mentions no in consumer is more than business into the evidence.&rdquo;
+                  ) : linkedMentions.length === 0 ? (
+                    <p className="bp-doc-subtext">
+                      {evidenceError
+                        ? 'Unable to load linked mentions for this cluster.'
+                        : 'No linked mentions available for this cluster.'}
                     </p>
-                  </div>
+                  ) : (
+                    linkedMentions.map((mention) => {
+                      const src = formatSourceMeta(mention.source);
+                      const score = Number(mention.sentiment_score ?? 0);
+                      const formattedScore = `${score > 0 ? '+' : ''}${score.toFixed(2)}`;
+                      const published = formatDateLabel(mention.published_at);
 
-                  {/* Evidence item 2: Reddit */}
-                  <div className="bp-evidence-item">
-                    <div className="bp-evidence-source-row">
-                      <span className="bp-source-icon-reddit">R</span>
-                      <strong className="bp-evidence-source">Reddit</strong>
-                      <span className="bp-evidence-time">&bull; 2 quoted one ago</span>
-                    </div>
-                    <p className="bp-evidence-quote">
-                      &ldquo;Today&apos;s Billing API for 500 errors small ootange an when post&rdquo;
-                    </p>
-                  </div>
+                      return (
+                        <div key={mention.id} className="bp-evidence-item">
+                          <div className="bp-evidence-source-row">
+                            <span className={src.iconClass}>{src.glyph}</span>
+                            <strong className="bp-evidence-source">{src.label}</strong>
+                            {mention.author && (
+                              <span className="bp-evidence-time">&bull; @{mention.author}</span>
+                            )}
+                            {published && (
+                              <span className="bp-evidence-time">&bull; {published}</span>
+                            )}
+                            <span className="bp-evidence-score">{formattedScore}</span>
+                            {mention.url && mention.url !== '#' && (
+                              <a
+                                href={mention.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="bp-complaint-external-link"
+                                title="Open original mention"
+                                aria-label="Open original mention"
+                              >
+                                <ExternalLink className="bp-icon-xs" />
+                              </a>
+                            )}
+                          </div>
+                          <p className="bp-evidence-quote">
+                            &ldquo;{mention.content || mention.title}&rdquo;
+                          </p>
+                        </div>
+                      );
+                    })
+                  )}
                 </div>
 
                 {/* Rejection Form (In-line if active) */}
@@ -698,8 +719,9 @@ export const ActionTriageView: React.FC = () => {
                         type="button"
                         onClick={() => setIsRejecting(false)}
                         className="bp-close-icon-btn"
+                        aria-label="Close rejection form"
                       >
-                        <X className="w-3.5 h-3.5" />
+                        <X className="bp-icon-sm" />
                       </button>
                     </div>
                     <textarea
@@ -743,7 +765,7 @@ export const ActionTriageView: React.FC = () => {
                         onClick={handleApprove}
                         className="bp-btn-primary bp-btn-action-primary"
                       >
-                        Approve &amp; Dispatch to Jira →
+                        Approve &amp; Dispatch →
                       </button>
 
                       <button
@@ -777,13 +799,13 @@ export const ActionTriageView: React.FC = () => {
                         onClick={handleExecute}
                         className="bp-btn-primary bp-btn-action-primary"
                       >
-                        Execute &amp; Push to Jira →
+                        Execute Action →
                       </button>
                     </div>
                   ) : currentAction.status === 'executed' ? (
                     <div className="bp-status-executed-banner">
-                      <Check className="w-4 h-4 text-emerald-600" />
-                      <span>Ticket Executed &amp; Dispatched to External Jira Workspace</span>
+                      <Check className="bp-icon-md bp-text-success" />
+                      <span>Action Executed</span>
                     </div>
                   ) : (
                     <div className="bp-status-rejected-banner">
@@ -794,7 +816,7 @@ export const ActionTriageView: React.FC = () => {
               </>
             ) : (
               <div className="bp-inspector-empty">
-                <p>Select any ticket proposal from the Kanban columns to inspect and review.</p>
+                <p>Select any action from the Kanban columns to inspect and review.</p>
               </div>
             )}
           </div>

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import {
   RefreshCw,
   Search,
@@ -9,16 +9,52 @@ import {
 } from 'lucide-react';
 import type { IssueCluster, Mention } from '../types';
 import { api } from '../api/client';
-import { useAuth } from '../context/AuthContext';
-import {
-  getDeterministicBars,
-  getHourlySpikeBars,
-  getChannelBadges,
-  getPgVectorMatch,
-} from '../utils/metrics';
+import { useAuth } from '../context/useAuth';
+import { getDeterministicBars } from '../utils/metrics';
 
 interface RadarViewProps {
   onNavigateToActions?: () => void;
+}
+
+function formatSourceLabel(source: string): string {
+  const lower = (source || '').toLowerCase();
+  if (lower.includes('hacker') || lower === 'hn') return 'HN';
+  if (lower.includes('google')) return 'Google News';
+  if (lower.includes('reddit')) return 'Reddit';
+  if (lower === 'x' || lower.includes('twitter')) return 'X';
+  return source || 'Web';
+}
+
+function buildMentionBuckets(mentions: Mention[], bucketCount = 12): { height: number; count: number }[] {
+  if (mentions.length === 0) {
+    return Array.from({ length: bucketCount }, () => ({ height: 14, count: 0 }));
+  }
+
+  const timestamps = mentions
+    .map((m) => new Date(m.published_at || m.created_at || '').getTime())
+    .filter((ts) => !Number.isNaN(ts));
+
+  if (timestamps.length === 0) {
+    return Array.from({ length: bucketCount }, () => ({ height: 14, count: 0 }));
+  }
+
+  const maxTs = Math.max(...timestamps);
+  const rawMinTs = Math.min(...timestamps);
+  const minTs = maxTs === rawMinTs ? maxTs - 24 * 60 * 60 * 1000 : rawMinTs;
+  const span = Math.max(1, maxTs - minTs);
+
+  const counts = new Array<number>(bucketCount).fill(0);
+  for (const ts of timestamps) {
+    const ratio = (ts - minTs) / span;
+    const idx = Math.min(bucketCount - 1, Math.max(0, Math.floor(ratio * bucketCount)));
+    counts[idx] += 1;
+  }
+
+  const maxCount = Math.max(1, ...counts);
+  return counts.map((count) => ({
+    count,
+    height: count === 0 ? 14 : Math.max(20, Math.round((count / maxCount) * 100)),
+  }));
 }
 
 export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => {
@@ -30,98 +66,102 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
     critical_clusters: number;
     avg_negative_ratio: number;
   } | null>(null);
-  const [lastSynced, setLastSynced] = useState<Date>(() => new Date());
-  const [loading, setLoading] = useState(true);
+  const [lastSynced, setLastSynced] = useState<Date | null>(null);
+  const [loadedKey, setLoadedKey] = useState<string>('');
+  const [isManualRefreshing, setIsManualRefreshing] = useState(false);
+  const [refreshTick, setRefreshTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState('open');
   const [searchTerm, setSearchTerm] = useState('');
 
   // Selected cluster for right-hand persistent inspector
   const [selectedClusterId, setSelectedClusterId] = useState<string | null>(null);
-  const [clusterMentions, setClusterMentions] = useState<Mention[]>([]);
-  const [loadingMentions, setLoadingMentions] = useState(false);
+  const [mentionsState, setMentionsState] = useState<{
+    clusterId: string | null;
+    items: Mention[];
+    failed: boolean;
+  }>({ clusterId: null, items: [], failed: false });
 
-  const fetchClusters = useCallback(async (isManual = false) => {
-    setLoading(true);
-    setError(null);
-    const startTime = Date.now();
-    try {
-      const [clusterData, statsData] = await Promise.all([
-        api.clusters.list({
-          status: statusFilter === 'all' ? undefined : statusFilter,
-          brand_id: selectedBrandId || undefined,
-        }),
-        api.clusters.stats({
-          brand_id: selectedBrandId || undefined,
-        }).catch(() => null),
-      ]);
-      setClusters(clusterData);
-      if (statsData) setStats(statsData);
-      setLastSynced(new Date());
-
-      // If no cluster selected yet, default to the highest priority cluster or first cluster
-      if (clusterData.length > 0) {
-        setSelectedClusterId((prev) => {
-          if (prev && clusterData.some((c) => c.id === prev)) return prev;
-          const critical = clusterData.find((c) => (c.negative_ratio || 0) >= 0.6);
-          return critical ? critical.id : clusterData[0].id;
-        });
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch clusters');
-    } finally {
-      if (isManual) {
-        const elapsed = Date.now() - startTime;
-        const delay = Math.max(0, 350 - elapsed);
-        setTimeout(() => setLoading(false), delay);
-      } else {
-        setLoading(false);
-      }
-    }
-  }, [statusFilter, selectedBrandId]);
+  const refreshDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const filterKey = `${statusFilter}:${selectedBrandId}`;
+  const isInitialLoading = loadedKey !== filterKey;
 
   useEffect(() => {
-    fetchClusters(false);
-    const interval = setInterval(() => {
-      fetchClusters(false);
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [fetchClusters]);
+    const controller = new AbortController();
 
-  // Selected cluster object
-  const selectedCluster = useMemo(() => {
-    return clusters.find((c) => c.id === selectedClusterId) || clusters[0] || null;
-  }, [clusters, selectedClusterId]);
+    const runFetch = async () => {
+      const startTime = Date.now();
+      try {
+        const [clusterData, statsData] = await Promise.all([
+          api.clusters.list(
+            {
+              status: statusFilter === 'all' ? undefined : statusFilter,
+              brand_id: selectedBrandId || undefined,
+            },
+            controller.signal,
+          ),
+          api.clusters
+            .stats(
+              {
+                brand_id: selectedBrandId || undefined,
+              },
+              controller.signal,
+            )
+            .catch(() => null),
+        ]);
 
-  // Fetch mentions whenever selectedCluster changes
-  useEffect(() => {
-    if (!selectedCluster) {
-      setClusterMentions([]);
-      return;
-    }
+        if (controller.signal.aborted) return;
 
-    let isMounted = true;
-    setLoadingMentions(true);
+        setClusters(clusterData);
+        if (statsData) setStats(statsData);
+        setError(null);
+        setLastSynced(new Date());
+        setLoadedKey(filterKey);
 
-    api.clusters
-      .mentions(selectedCluster.id)
-      .then((mentions) => {
-        if (isMounted) {
-          setClusterMentions(mentions);
+        if (clusterData.length === 0) {
+          setSelectedClusterId(null);
+        } else {
+          setSelectedClusterId((prev) => {
+            if (prev && clusterData.some((c) => c.id === prev)) return prev;
+            const critical = clusterData.find((c) => (c.negative_ratio || 0) >= 0.6);
+            return critical ? critical.id : clusterData[0].id;
+          });
         }
-      })
-      .catch((err) => {
-        console.error('Failed to load cluster mentions:', err);
-        if (isMounted) setClusterMentions([]);
-      })
-      .finally(() => {
-        if (isMounted) setLoadingMentions(false);
-      });
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        setError(err instanceof Error ? err.message : 'Failed to fetch clusters');
+        setLoadedKey(filterKey);
+      } finally {
+        if (!controller.signal.aborted) {
+          const elapsed = Date.now() - startTime;
+          const remaining = Math.max(0, 300 - elapsed);
+          if (refreshDelayRef.current) clearTimeout(refreshDelayRef.current);
+          refreshDelayRef.current = setTimeout(() => {
+            setIsManualRefreshing(false);
+          }, remaining);
+        }
+      }
+    };
+
+    void runFetch();
+    const interval = setInterval(() => {
+      void runFetch();
+    }, 10000);
 
     return () => {
-      isMounted = false;
+      controller.abort();
+      clearInterval(interval);
+      if (refreshDelayRef.current) {
+        clearTimeout(refreshDelayRef.current);
+        refreshDelayRef.current = null;
+      }
     };
-  }, [selectedCluster]);
+  }, [statusFilter, selectedBrandId, filterKey, refreshTick]);
+
+  const handleManualRefresh = () => {
+    setIsManualRefreshing(true);
+    setRefreshTick((t) => t + 1);
+  };
 
   // Filtered clusters by search term
   const filteredClusters = useMemo(() => {
@@ -135,8 +175,55 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
     });
   }, [clusters, searchTerm]);
 
-  // Metrics figures
-  const totalMentions = stats?.total_mentions ?? clusters.reduce((acc, c) => acc + (c.mention_count || 0), 0);
+  // Selected cluster must come from the active filtered list
+  const selectedCluster = useMemo(() => {
+    if (filteredClusters.length === 0) return null;
+    if (selectedClusterId) {
+      const found = filteredClusters.find((c) => c.id === selectedClusterId);
+      if (found) return found;
+    }
+    const critical = filteredClusters.find((c) => (c.negative_ratio || 0) >= 0.6);
+    return critical || filteredClusters[0];
+  }, [filteredClusters, selectedClusterId]);
+
+  const activeClusterId = selectedCluster?.id ?? null;
+
+  // Fetch mentions only when the selected cluster ID changes
+  useEffect(() => {
+    if (!activeClusterId) return;
+
+    const controller = new AbortController();
+
+    api.clusters
+      .mentions(activeClusterId, controller.signal)
+      .then((mentions) => {
+        if (!controller.signal.aborted) {
+          setMentionsState({ clusterId: activeClusterId, items: mentions, failed: false });
+        }
+      })
+      .catch((err) => {
+        if (controller.signal.aborted) return;
+        console.error('Failed to load cluster mentions:', err);
+        setMentionsState({ clusterId: activeClusterId, items: [], failed: true });
+      });
+
+    return () => {
+      controller.abort();
+    };
+  }, [activeClusterId]);
+
+  const loadingMentions = Boolean(activeClusterId && mentionsState.clusterId !== activeClusterId);
+  const clusterMentions = useMemo(
+    () => (activeClusterId && mentionsState.clusterId === activeClusterId ? mentionsState.items : []),
+    [activeClusterId, mentionsState],
+  );
+  const mentionsError = Boolean(
+    activeClusterId && mentionsState.clusterId === activeClusterId && mentionsState.failed,
+  );
+
+  // Real metrics (never fall back to fake numbers)
+  const totalMentions =
+    stats?.total_mentions ?? clusters.reduce((acc, c) => acc + (c.mention_count || 0), 0);
   const activeClustersCount = stats?.total_clusters ?? clusters.length;
   const criticalClustersCount =
     stats?.critical_clusters ?? clusters.filter((c) => (c.negative_ratio || 0) >= 0.6).length;
@@ -147,49 +234,50 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
       ? (clusters.reduce((acc, c) => acc + (c.negative_ratio || 0), 0) / clusters.length) * 100
       : 0;
 
-  // Formatted display values matching mockups (fallback to realistic values if zero initial records)
-  const displayTotalMentions = totalMentions > 0 ? totalMentions.toLocaleString() : '1,420';
-  const displayActiveClusters = activeClustersCount > 0 ? activeClustersCount : 12;
-  const displayCriticalAlerts = criticalClustersCount > 0 ? criticalClustersCount : 3;
-  const displayAvgNegativeRatio = avgNegativeRatio > 0 ? `${avgNegativeRatio.toFixed(1)}%` : '38.4%';
+  const recentHourCount = useMemo(() => {
+    const oneHourMs = 60 * 60 * 1000;
+    const now = lastSynced ? lastSynced.getTime() : 0;
+    if (!now) return 0;
+    return clusters.filter((c) => {
+      const ts = new Date(c.first_seen_at).getTime();
+      return !Number.isNaN(ts) && now - ts <= oneHourMs;
+    }).length;
+  }, [clusters, lastSynced]);
 
-  // Fallback quoted complaints for inspector when API returns empty raw mentions
-  const fallbackQuotedComplaints = useMemo(() => {
-    if (!selectedCluster) return [];
-    return [
-      {
-        id: 'fb-1',
-        source: 'HN',
-        content: `${selectedCluster.title}: API keeps throwing 504 Gateway Timeouts during checkout. Major delay for our users.`,
-        score: -0.88,
-        url: '#',
-      },
-      {
-        id: 'fb-2',
-        source: 'Reddit',
-        content: 'Package has been stuck in the local hub for 3 days now, no updates from support.',
-        score: -0.75,
-        url: '#',
-      },
-      {
-        id: 'fb-3',
-        source: 'X',
-        content: 'Unable to log back in after checking order status. System error?',
-        score: -0.81,
-        url: '#',
-      },
-    ];
-  }, [selectedCluster]);
+  const displayTotalMentions = totalMentions.toLocaleString();
+  const displayActiveClusters = activeClustersCount;
+  const displayCriticalAlerts = criticalClustersCount;
+  const displayAvgNegativeRatio = `${avgNegativeRatio.toFixed(1)}%`;
 
-  const displayMentions = clusterMentions.length > 0
-    ? clusterMentions.slice(0, 4).map((m) => ({
-        id: m.id,
-        source: m.source.toUpperCase().includes('HACKER') || m.source === 'hn' ? 'HN' : m.source.toUpperCase().includes('REDDIT') ? 'Reddit' : 'X',
-        content: m.content || m.title,
-        score: m.sentiment_score !== undefined ? m.sentiment_score : -0.82,
-        url: m.url,
-      }))
-    : fallbackQuotedComplaints;
+  const displayMentions = useMemo(
+    () =>
+      clusterMentions.slice(0, 4).map((m) => {
+        const score = Number(m.sentiment_score ?? 0);
+        const sentimentClass =
+          m.sentiment_label === 'positive' || score >= 0.05
+            ? 'positive'
+            : m.sentiment_label === 'negative' || score <= -0.05
+            ? 'negative'
+            : 'neutral';
+        return {
+          id: m.id,
+          source: formatSourceLabel(m.source),
+          content: m.content || m.title,
+          score,
+          formattedScore: `${score > 0 ? '+' : ''}${score.toFixed(2)}`,
+          sentimentClass,
+          url: m.url,
+        };
+      }),
+    [clusterMentions],
+  );
+
+  const activityBuckets = useMemo(
+    () => buildMentionBuckets(clusterMentions, 12),
+    [clusterMentions],
+  );
+
+  const selectedAvgSentiment = Number(selectedCluster?.avg_sentiment ?? 0);
 
   return (
     <div className="bp-view-shell">
@@ -218,7 +306,7 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
           <div className="bp-kpi-content">
             <span className="bp-micro-label">ACTIVE CLUSTERS</span>
             <div className="bp-kpi-figure">{displayActiveClusters}</div>
-            <span className="bp-kpi-subtext">3 surfaced this hour</span>
+            <span className="bp-kpi-subtext">{recentHourCount} surfaced this hour</span>
           </div>
           <div className="bp-kpi-histogram" aria-hidden="true">
             {getDeterministicBars('active_clusters', 10, 20, 90).map((h, i) => (
@@ -237,7 +325,11 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
             <span className="bp-micro-label">CRITICAL ALERTS</span>
             <div className="bp-kpi-figure">{displayCriticalAlerts}</div>
             <div className="bp-kpi-pill-slot">
-              <span className="bp-pill-needs-attention">Needs attention</span>
+              {criticalClustersCount > 0 ? (
+                <span className="bp-pill-needs-attention">Needs attention</span>
+              ) : (
+                <span className="bp-pill-neutral">All clear</span>
+              )}
             </div>
           </div>
           <div className="bp-kpi-histogram" aria-hidden="true">
@@ -283,6 +375,8 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
             <button
               key={tab.id}
               type="button"
+              role="tab"
+              aria-selected={statusFilter === tab.id}
               className={`bp-filter-pill-btn ${statusFilter === tab.id ? 'active' : ''}`}
               onClick={() => setStatusFilter(tab.id)}
             >
@@ -294,34 +388,42 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
         {/* Search & Refresh */}
         <div className="bp-toolbar-right">
           <div className="bp-search-input-box">
-            <Search className="w-3.5 h-3.5 text-stone-400" />
+            <Search className="bp-icon-sm bp-text-muted" />
             <input
               type="text"
               placeholder="Search clusters..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="bp-search-input"
+              aria-label="Search clusters"
             />
           </div>
 
           <span className="bp-sync-time">
-            Synced {lastSynced.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+            {lastSynced
+              ? `Synced ${lastSynced.toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                  second: '2-digit',
+                })}`
+              : 'Syncing...'}
           </span>
 
           <button
             type="button"
-            onClick={() => fetchClusters(true)}
+            onClick={handleManualRefresh}
             className="bp-icon-refresh-btn"
             title="Refresh clusters"
+            aria-label="Refresh clusters"
           >
-            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`bp-icon-sm ${isInitialLoading || isManualRefreshing ? 'bp-spin' : ''}`} />
           </button>
         </div>
       </section>
 
       {/* Error alert */}
       {error && (
-        <div className="bp-alert-error mb-4">
+        <div className="bp-alert-error bp-mb-4">
           <span>{error}</span>
         </div>
       )}
@@ -330,14 +432,14 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
       <div className="bp-radar-split-workspace">
         {/* Left Column (65%): 2x2 Cluster Grid */}
         <div className="bp-radar-cluster-area">
-          {loading && clusters.length === 0 ? (
+          {isInitialLoading && clusters.length === 0 ? (
             <div className="bp-loading-well">
               <span className="bp-sync-spinner" />
               <span>Scanning pgvector clusters...</span>
             </div>
           ) : filteredClusters.length === 0 ? (
             <div className="bp-empty-well">
-              <Sparkles className="w-8 h-8 text-stone-400 mb-2" />
+              <Sparkles className="bp-icon-xl bp-text-muted bp-mb-2" />
               <div className="bp-empty-title">No clusters found</div>
               <p className="bp-empty-desc">
                 No active discussions match current filters. Ingest social posts to synthesize clusters.
@@ -349,7 +451,6 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
                 const negRatio = (cluster.negative_ratio || 0) * 100;
                 const isCritical = negRatio >= 60;
                 const isSelected = selectedCluster?.id === cluster.id;
-                const channels = getChannelBadges(cluster.id);
 
                 return (
                   <article
@@ -357,7 +458,7 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
                     className={`bp-cluster-card ${isSelected ? 'selected' : ''}`}
                     onClick={() => setSelectedClusterId(cluster.id)}
                   >
-                    {/* Top Row: Priority micro-label & Needs Attention Pill */}
+                    {/* Top Row: Priority micro-label & Status Pill */}
                     <div className="bp-cluster-card-top">
                       <span className="bp-micro-label">
                         {isCritical ? 'HIGHEST PRIORITY' : 'ACTIVE CLUSTER'}
@@ -381,29 +482,27 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
                         className="bp-sentiment-segment-neg"
                         style={{ width: `${Math.min(negRatio, 100)}%` }}
                       />
-                      {/* Neutral Secondary Segment */}
+                      {/* Remainder Segment */}
                       <div
                         className="bp-sentiment-segment-secondary"
-                        style={{ width: `${Math.min(25, 100 - negRatio)}%` }}
+                        style={{ width: `${Math.max(0, Math.min(25, 100 - negRatio))}%` }}
                       />
                     </div>
 
-                    {/* Subtitle with mention count & negative percentage */}
+                    {/* Subtitle with real brand, mention count & negative percentage */}
                     <p className="bp-cluster-caption">
-                      {cluster.mention_count} mentions across 3 channels &bull; {Math.round(negRatio)}% negative
+                      {cluster.brand_name ? `${cluster.brand_name} \u2022 ` : ''}
+                      {cluster.mention_count} mention{cluster.mention_count === 1 ? '' : 's'} &bull;{' '}
+                      {Math.round(negRatio)}% negative
                     </p>
 
                     <div className="bp-card-divider" />
 
-                    {/* Footer: Channel badges & View Cluster link */}
+                    {/* Footer: Negative count badge & View Cluster link */}
                     <div className="bp-cluster-footer">
-                      <div className="bp-channel-pills-row">
-                        {channels.map((ch, idx) => (
-                          <span key={idx} className="bp-channel-pill">
-                            {ch}
-                          </span>
-                        ))}
-                      </div>
+                      <span className="bp-pill-neutral">
+                        {cluster.negative_count} negative
+                      </span>
 
                       <button
                         type="button"
@@ -433,29 +532,26 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
                 <div className="bp-inspector-header">
                   <div className="bp-inspector-header-left">
                     <span className="bp-micro-label">CLUSTER SIGNAL INSPECTOR</span>
-                    <span className="bp-inspector-subcaption">pgvector similarity score</span>
+                    <span className="bp-inspector-subcaption">avg VADER sentiment</span>
                   </div>
                   <div className="bp-similarity-score-pill">
-                    {getPgVectorMatch(selectedCluster.id)}
+                    VADER {selectedAvgSentiment >= 0 ? '+' : ''}
+                    {selectedAvgSentiment.toFixed(2)}
                   </div>
                 </div>
 
-                <h3 className="bp-inspector-cluster-title">
-                  {selectedCluster.title}
-                </h3>
+                <h3 className="bp-inspector-cluster-title">{selectedCluster.title}</h3>
 
-                {/* Micro-chart: 24h Hourly Mention Spike */}
+                {/* Mention Activity Histogram */}
                 <div className="bp-inspector-spike-section">
-                  <div className="bp-spike-chart-label">
-                    Tiny 24h hourly mention spike bar chart
-                  </div>
+                  <div className="bp-spike-chart-label">Mention Activity (Recent)</div>
                   <div className="bp-spike-chart-bars" aria-hidden="true">
-                    {getHourlySpikeBars(selectedCluster.id, 18).map((h, i) => (
+                    {activityBuckets.map((bucket, i) => (
                       <div
                         key={i}
                         className="bp-spike-bar"
-                        style={{ height: `${h}%` }}
-                        title={`Hour ${i + 1}: ${h}% volume`}
+                        style={{ height: `${bucket.height}%` }}
+                        title={`Bucket ${i + 1}: ${bucket.count} mention${bucket.count === 1 ? '' : 's'}`}
                       />
                     ))}
                   </div>
@@ -464,13 +560,25 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
                 {/* Mentions Quoted Section */}
                 <div className="bp-inspector-mentions-section">
                   <div className="bp-mentions-header-label">
-                    {displayMentions.length} live quoted complaints
+                    {loadingMentions
+                      ? 'Loading quoted mentions...'
+                      : `${displayMentions.length} live quoted ${
+                          displayMentions.length === 1 ? 'mention' : 'mentions'
+                        }`}
                   </div>
 
                   {loadingMentions ? (
                     <div className="bp-mentions-loading">
                       <span className="bp-sync-spinner" />
                       <span>Loading quoted mentions...</span>
+                    </div>
+                  ) : displayMentions.length === 0 ? (
+                    <div className="bp-inspector-empty">
+                      <p>
+                        {mentionsError
+                          ? 'Unable to load mentions for this cluster.'
+                          : 'No raw mentions recorded for this cluster yet.'}
+                      </p>
                     </div>
                   ) : (
                     <div className="bp-mentions-list">
@@ -480,10 +588,8 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
                             <span className="bp-complaint-source">{mention.source}:</span>{' '}
                             <span className="bp-complaint-text">{mention.content}</span>
                           </div>
-                          <div className="bp-complaint-score-pill">
-                            {mention.score <= 0
-                              ? mention.score.toFixed(2)
-                              : `-${mention.score.toFixed(2)}`}
+                          <div className={`bp-complaint-score-pill ${mention.sentimentClass}`}>
+                            {mention.formattedScore}
                           </div>
                           {mention.url && mention.url !== '#' && (
                             <a
@@ -492,8 +598,9 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
                               rel="noreferrer"
                               className="bp-complaint-external-link"
                               title="Open original discussion"
+                              aria-label="Open original discussion"
                             >
-                              <ExternalLink className="w-3 h-3" />
+                              <ExternalLink className="bp-icon-xs" />
                             </a>
                           )}
                         </div>
@@ -513,14 +620,14 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
                     }}
                     className="bp-btn-primary bp-btn-full"
                   >
-                    Draft Jira Ticket →
+                    Open Action Triage →
                   </button>
                 </div>
               </>
             ) : (
               <div className="bp-inspector-empty">
-                <Sparkles className="w-6 h-6 text-stone-400 mb-2" />
-                <p>Select any cluster to inspect pgvector similarity and live quoted customer complaints.</p>
+                <Sparkles className="bp-icon-lg bp-text-muted bp-mb-2" />
+                <p>Select any cluster to inspect sentiment signals and live quoted mentions.</p>
               </div>
             )}
           </div>
@@ -530,11 +637,11 @@ export const RadarView: React.FC<RadarViewProps> = ({ onNavigateToActions }) => 
       {/* Bottom Page Footer Tag Strip */}
       <footer className="bp-page-footer">
         <div className="bp-footer-tag">
-          <Shield className="w-3.5 h-3.5" />
+          <Shield className="bp-icon-sm" />
           <span>WORKSPACE ACCESS CONTROLS</span>
         </div>
         <div className="bp-footer-tag">
-          <UserCheck className="w-3.5 h-3.5" />
+          <UserCheck className="bp-icon-sm" />
           <span>HUMAN-REVIEWED TRIAGE</span>
         </div>
       </footer>

@@ -1,20 +1,33 @@
 import React from 'react';
 import { LogOut, ChevronDown } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
+import { useAuth } from '../context/useAuth';
 
 interface NavbarProps {
   activeTab: 'radar' | 'actions' | 'brands';
   setActiveTab: (tab: 'radar' | 'actions' | 'brands') => void;
   pendingCount?: number;
+  systemStatus?: 'ok' | 'degraded' | 'checking';
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, pendingCount = 0 }) => {
+export const Navbar: React.FC<NavbarProps> = ({
+  activeTab,
+  setActiveTab,
+  pendingCount = 0,
+  systemStatus = 'ok',
+}) => {
   const { role, logout, brands, selectedBrandId, setSelectedBrandId } = useAuth();
 
   const formatRole = (r: string | null) => {
     if (!r) return 'Viewer';
     return r.charAt(0).toUpperCase() + r.slice(1);
   };
+
+  const statusMeta =
+    systemStatus === 'ok'
+      ? { label: 'System Operational', dotClass: 'bp-status-dot-ok' }
+      : systemStatus === 'degraded'
+      ? { label: 'Gateway Degraded', dotClass: 'bp-status-dot-degraded' }
+      : { label: 'Checking Status...', dotClass: 'bp-status-dot-checking' };
 
   return (
     <header className="bp-navbar-shell">
@@ -32,7 +45,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, pending
             onClick={() => setActiveTab('radar')}
             className={`bp-nav-pill-btn ${activeTab === 'radar' ? 'active' : ''}`}
           >
-            Radar & Clusters
+            Radar &amp; Clusters
           </button>
 
           <button
@@ -55,9 +68,9 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, pending
         {/* Right: Operational Status, Brand Select, Role Pill & Sign Out */}
         <div className="bp-nav-right">
           {/* System Operational Status Pill */}
-          <div className="bp-status-pill">
-            <span className="bp-status-dot-ok" />
-            <span>System Operational</span>
+          <div className="bp-status-pill" title={`Gateway status: ${statusMeta.label}`}>
+            <span className={statusMeta.dotClass} />
+            <span>{statusMeta.label}</span>
           </div>
 
           {/* Brand Filter Dropdown */}
@@ -91,7 +104,7 @@ export const Navbar: React.FC<NavbarProps> = ({ activeTab, setActiveTab, pending
             title="Sign Out"
             aria-label="Sign out of workspace"
           >
-            <LogOut className="w-4 h-4" />
+            <LogOut className="bp-icon-md" />
           </button>
         </div>
       </div>

@@ -1,6 +1,15 @@
 import React, { useState } from 'react';
-import { Lock, Mail, User as UserIcon, AlertCircle, Shield, UserCheck, ChevronDown, ChevronUp } from 'lucide-react';
-import { useAuth } from '../context/AuthContext';
+import {
+  Lock,
+  Mail,
+  User as UserIcon,
+  AlertCircle,
+  Shield,
+  UserCheck,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
+import { useAuth } from '../context/useAuth';
 
 export const AuthModal: React.FC = () => {
   const { login, register } = useAuth();
@@ -42,18 +51,23 @@ export const AuthModal: React.FC = () => {
     setPassword(creds.pass);
     setName(creds.name);
     setError(null);
-
-    // Auto-attempt login with demo credentials
     setLoading(true);
+
     try {
       if (isRegister) {
         await register(creds.email, creds.pass, creds.name);
       } else {
         await login(creds.email, creds.pass);
       }
-    } catch {
-      // If login failed (e.g. user not yet seeded), fill in fields and inform user
-      setError(null);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Sign-in failed';
+      if (!isRegister) {
+        setError(
+          `Demo account ${creds.email} could not sign in (${msg}). Switch to "Create Account" to register it.`,
+        );
+      } else {
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -70,7 +84,7 @@ export const AuthModal: React.FC = () => {
           <div className="bp-brand-wordmark">BrandPulse</div>
           <div className="bp-status-pill">
             <span className="bp-status-dot-ok" />
-            <span>System Operational</span>
+            <span>Workspace Preview</span>
           </div>
         </div>
 
@@ -123,7 +137,7 @@ export const AuthModal: React.FC = () => {
                   <span className="bp-channel-pill">X</span>
                   <span className="bp-channel-pill">R</span>
                 </div>
-                <span className="bp-view-issue-link">
+                <span className="bp-preview-issue-link">
                   View issue <span className="bp-arrow-glyph">↗</span>
                 </span>
               </div>
@@ -171,11 +185,11 @@ export const AuthModal: React.FC = () => {
         {/* Bottom Footer Controls */}
         <div className="bp-auth-showcase-footer">
           <div className="bp-footer-tag">
-            <Shield className="w-3.5 h-3.5" />
+            <Shield className="bp-icon-sm" />
             <span>WORKSPACE ACCESS CONTROLS</span>
           </div>
           <div className="bp-footer-tag">
-            <UserCheck className="w-3.5 h-3.5" />
+            <UserCheck className="bp-icon-sm" />
             <span>HUMAN-REVIEWED TRIAGE</span>
           </div>
         </div>
@@ -223,8 +237,8 @@ export const AuthModal: React.FC = () => {
 
           {/* Error Alert */}
           {error && (
-            <div className="bp-alert-error mb-4">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <div className="bp-alert-error bp-mb-4">
+              <AlertCircle className="bp-icon-md bp-shrink-0" />
               <span>{error}</span>
             </div>
           )}
@@ -233,10 +247,13 @@ export const AuthModal: React.FC = () => {
           <form onSubmit={handleSubmit} className="bp-auth-fields-form">
             {isRegister && (
               <div className="bp-field-group">
-                <label className="bp-field-label">Full Name</label>
+                <label className="bp-field-label" htmlFor="auth-name">
+                  Full Name
+                </label>
                 <div className="bp-input-wrapper">
                   <UserIcon className="bp-input-icon" />
                   <input
+                    id="auth-name"
                     type="text"
                     className="bp-input"
                     placeholder="Alex Rivera"
@@ -249,10 +266,13 @@ export const AuthModal: React.FC = () => {
             )}
 
             <div className="bp-field-group">
-              <label className="bp-field-label">Email Address</label>
+              <label className="bp-field-label" htmlFor="auth-email">
+                Email Address
+              </label>
               <div className="bp-input-wrapper">
                 <Mail className="bp-input-icon" />
                 <input
+                  id="auth-email"
                   type="email"
                   className="bp-input"
                   placeholder="alex@example.com"
@@ -264,10 +284,13 @@ export const AuthModal: React.FC = () => {
             </div>
 
             <div className="bp-field-group">
-              <label className="bp-field-label">Password</label>
+              <label className="bp-field-label" htmlFor="auth-password">
+                Password
+              </label>
               <div className="bp-input-wrapper">
                 <Lock className="bp-input-icon" />
                 <input
+                  id="auth-password"
                   type="password"
                   className="bp-input"
                   placeholder="••••••••"
@@ -299,7 +322,11 @@ export const AuthModal: React.FC = () => {
               onClick={() => setDemoOpen(!demoOpen)}
             >
               <span className="bp-quick-test-label">Quick Test Accounts</span>
-              {demoOpen ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+              {demoOpen ? (
+                <ChevronUp className="bp-icon-sm" />
+              ) : (
+                <ChevronDown className="bp-icon-sm" />
+              )}
             </button>
 
             {demoOpen && (
@@ -307,6 +334,7 @@ export const AuthModal: React.FC = () => {
                 <button
                   type="button"
                   className="bp-role-test-pill"
+                  disabled={loading}
                   onClick={() => handleDemoSelect('admin')}
                   title="Demo Admin: lead@brandpulse.dev"
                 >
@@ -315,6 +343,7 @@ export const AuthModal: React.FC = () => {
                 <button
                   type="button"
                   className="bp-role-test-pill"
+                  disabled={loading}
                   onClick={() => handleDemoSelect('responder')}
                   title="Demo Responder: responder@brandpulse.dev"
                 >
@@ -323,6 +352,7 @@ export const AuthModal: React.FC = () => {
                 <button
                   type="button"
                   className="bp-role-test-pill"
+                  disabled={loading}
                   onClick={() => handleDemoSelect('viewer')}
                   title="Demo Viewer: viewer@brandpulse.dev"
                 >

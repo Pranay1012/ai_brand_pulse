@@ -9,7 +9,7 @@ export interface User {
 
 export interface Workspace {
   id: string;
-  name: string;
+  name?: string;
   created_at?: string;
 }
 
@@ -76,6 +76,9 @@ export interface Action {
   brand_id: string;
   brand_name?: string;
   cluster_title?: string;
+  mention_count?: number;
+  negative_count?: number;
+  avg_sentiment?: number;
   action_type: 'jira_ticket' | 'pr_response' | 'sales_counter_hook';
   status: 'pending' | 'approved' | 'rejected' | 'executed';
   payload: JiraPayload | Record<string, unknown>;
@@ -84,5 +87,10 @@ export interface Action {
   reject_reason?: string;
   created_at: string;
   reviewed_at?: string;
+}
+
+export interface ClusterDetail extends IssueCluster {
+  mentions: Mention[];
+  actions: Action[];
 }
 
